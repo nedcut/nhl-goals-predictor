@@ -1,8 +1,19 @@
 """
 Goaltender data fetching and feature engineering.
 
-This module handles fetching goalie statistics from game boxscores and
-computing rolling goalie performance features for prediction.
+This module handles fetching starting goalie statistics from NHL game boxscores
+and computing rolling goalie performance features for prediction.
+
+Features generated:
+- home_goalie_sv_pct / away_goalie_sv_pct: Rolling save percentage (10-game window)
+- home_goalie_gaa / away_goalie_gaa: Rolling goals against average (10-game window)
+
+Data is cached to data/goalies/goalie_stats.csv to avoid re-fetching.
+
+Usage:
+    from src.goalies import add_goalie_features
+
+    df_with_goalies = add_goalie_features(df, fetch_missing=True)
 """
 
 from __future__ import annotations

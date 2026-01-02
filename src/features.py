@@ -2,16 +2,23 @@
 Feature engineering utilities for NHL total goals prediction.
 
 The functions in this module operate on the raw game logs produced by
-`src.data.build_dataset`.  They generate rolling averages and other features
+`src.data.build_dataset`. They generate rolling averages and other features
 that capture team performance, fatigue, and momentum.
 
-Features include:
-- Rolling goals for/against averages
-- Rest days and back-to-back indicators
-- Win streaks
-- Home/away performance splits
-- Season progression
-- Team pace (total goals per game)
+Features generated (20 total):
+- Rolling goals for/against averages (home_avg_GF, away_avg_GF, etc.)
+- Rest days and back-to-back indicators (home_rest_days, home_is_back_to_back)
+- Win streaks (home_win_streak, away_win_streak)
+- Win percentages (home_win_pct, away_win_pct)
+- Games played in season (home_games_played, away_games_played)
+- Goalie rolling stats (home_goalie_sv_pct, home_goalie_gaa, etc.)
+
+Usage:
+    from src.data import build_dataset
+    from src.features import add_features
+
+    df = build_dataset(['20232024', '20242025'])
+    df_features = add_features(df, window=20, include_goalies=True)
 """
 
 from __future__ import annotations

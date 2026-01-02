@@ -1,12 +1,23 @@
 """
 Utilities for downloading NHL game logs using the NHL Web API.
 
-This module defines functions to fetch schedules and final scores for NHL games
-from the public API at https://api-web.nhle.com. It includes regular season
-and playoff games.
+This module fetches schedules and final scores for NHL games from the public
+API at https://api-web.nhle.com. It includes regular season and playoff games.
 
-If run as a script (`python -m src.data`), it will download all games for the
-specified seasons and save the combined dataset as a CSV file.
+Data is cached per-season to data/raw/{season}.csv for fast subsequent loads.
+First download takes ~20 seconds per season; cached loads are instant.
+
+Usage:
+    from src.data import build_dataset
+
+    # Load 4 recent seasons (recommended for best model performance)
+    df = build_dataset(['20212022', '20222023', '20232024', '20242025'])
+
+    # Force re-download (skip cache)
+    df = build_dataset(['20232024'], use_cache=False)
+
+Columns returned:
+    gamePk, season, date, homeTeam, awayTeam, homeScore, awayScore, totalGoals
 """
 
 from __future__ import annotations

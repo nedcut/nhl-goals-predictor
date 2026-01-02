@@ -6,7 +6,20 @@ total goals scored in an NHL game. It supports:
 - Random Forest (baseline)
 - XGBoost (gradient boosting)
 - Time-series cross-validation
-- Model comparison
+- Model comparison and visualization
+
+Optimized XGBoost parameters (beats baseline by ~0.6%):
+    max_depth=2, learning_rate=0.01, n_estimators=150,
+    reg_alpha=1.0, reg_lambda=2.0, subsample=0.7,
+    colsample_bytree=0.7, min_child_weight=7
+
+Usage:
+    from src.features import add_features
+    from src.model import train_xgboost, compare_models
+
+    df_features = add_features(df, window=20, include_goalies=True)
+    result = train_xgboost(df_features)
+    print(f"MAE: {result.mae:.4f} vs Baseline: {result.baseline_mae:.4f}")
 """
 
 from __future__ import annotations
