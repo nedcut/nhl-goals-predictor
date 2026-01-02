@@ -1,0 +1,21 @@
+# macOS system files
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Data files (cached from API)
+data/
+
+# Trained models
+models/
+
+# Generated images
+*.png
+
+# IDE
+.vscode/
+.idea/
