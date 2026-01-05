@@ -244,16 +244,57 @@ class ModelArtifact:
 
         # Load model
         model_path = path.with_suffix(".joblib")
-        model = joblib.load(model_path)
-
         # Load metadata
         metadata_path = path.with_suffix(".json")
-        with open(metadata_path) as f:
-            metadata_dict = json.load(f)
-        metadata = ModelMetadata.from_dict(metadata_dict)
+        model = joblib.load(model_path)
+
+        if metadata_path.exists():
+            with open(metadata_path) as f:
+                metadata_dict = json.load(f)
+            metadata = ModelMetadata.from_dict(metadata_dict)
+        else:
+            if isinstance(model, dict) and "model" in model:
+                model = model["model"]
+            metadata = cls._metadata_from_legacy(model)
 
         logger.info("Loaded model artifact from %s", path)
         return cls(model=model, metadata=metadata)
+
+    @staticmethod
+    def _metadata_from_legacy(model_obj: Any) -> ModelMetadata:
+        """Build minimal metadata for legacy model files without JSON metadata."""
+        feature_names: List[str] = []
+        model_type = "Unknown"
+        model = model_obj
+
+        if isinstance(model_obj, dict) and "model" in model_obj:
+            model = model_obj["model"]
+            model_type = model_obj.get("model_type", type(model).__name__)
+            feature_names = model_obj.get("feature_names", [])
+        else:
+            model_type = type(model_obj).__name__
+            if hasattr(model_obj, "feature_names_in_"):
+                feature_names = list(model_obj.feature_names_in_)
+
+        if not feature_names:
+            raise ValueError(
+                "Legacy model is missing feature names; retrain and save a new artifact."
+            )
+
+        return ModelMetadata(
+            model_type=model_type,
+            feature_names=feature_names,
+            mae=float("nan"),
+            rmse=float("nan"),
+            baseline_mae=float("nan"),
+            improvement_pct=float("nan"),
+            training_date="unknown",
+            n_training_samples=0,
+            n_test_samples=0,
+            config_snapshot={},
+            data_seasons=[],
+            git_commit=_get_git_commit(),
+        )
 
     def predict(self, X) -> Any:
         """Make predictions using the model.
