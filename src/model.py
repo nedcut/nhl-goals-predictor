@@ -36,6 +36,12 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
 
+from .config import config
+from .logging_config import get_logger
+from .validation import validate_features, validate_target
+
+logger = get_logger(__name__)
+
 # Optional XGBoost import
 try:
     import xgboost as xgb
@@ -88,6 +94,8 @@ def get_feature_columns(df: pd.DataFrame) -> List[str]:
         # Goalie features (numeric only)
         "home_goalie_sv_", "away_goalie_sv_",
         "home_goalie_gaa", "away_goalie_gaa",
+        # Head-to-head and venue features
+        "h2h_", "venue_",
     )
     # Also include legacy column names for backwards compatibility
     legacy_prefixes = ("homeTeam_avg_", "awayTeam_avg_")
@@ -133,7 +141,7 @@ def prepare_features(
 
 def prepare_data(
     df: pd.DataFrame,
-    test_size: float = 0.2,
+    test_size: float | None = None,
     feature_cols: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, List[str]]:
     """Prepare and split data for training.
@@ -142,8 +150,9 @@ def prepare_data(
     ----------
     df : pd.DataFrame
         DataFrame with features and target.
-    test_size : float
+    test_size : float, optional
         Fraction of data for testing (from end of time series).
+        Defaults to config value.
     feature_cols : list of str, optional
         Feature columns to use.
 
@@ -151,6 +160,14 @@ def prepare_data(
     -------
     X_train, X_test, y_train, y_test, feature_names
     """
+    # Apply config defaults
+    if test_size is None:
+        test_size = config.model.test_size
+
+    # Validate inputs
+    validate_features(df)
+    validate_target(df)
+
     # Ensure chronological ordering
     df_sorted = df.sort_values("date").reset_index(drop=True)
 
@@ -159,7 +176,10 @@ def prepare_data(
     df_clean = df_sorted.dropna()
     n_dropped = n_before - len(df_clean)
     if n_dropped > 0:
-        print(f"Dropped {n_dropped} rows with missing features ({n_dropped/n_before:.1%} of data)")
+        logger.info(
+            "Dropped %d rows with missing features (%.1f%% of data)",
+            n_dropped, 100 * n_dropped / n_before
+        )
 
     if df_clean.empty:
         raise ValueError("No rows with complete feature data.")
@@ -383,6 +403,121 @@ def cross_validate(
     return result
 
 
+def optimize_hyperparameters(
+    df: pd.DataFrame,
+    n_trials: int = 100,
+    n_cv_folds: int | None = None,
+    timeout: int | None = None,
+    show_progress: bool = True,
+) -> Dict[str, Any]:
+    """Use Optuna to find optimal XGBoost hyperparameters.
+
+    Performs Bayesian optimization with time-series cross-validation
+    to find the best hyperparameters for XGBoost.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with features and target.
+    n_trials : int
+        Number of optimization trials to run.
+    n_cv_folds : int, optional
+        Number of cross-validation folds. Defaults to config value.
+    timeout : int, optional
+        Timeout in seconds. If provided, stops after this time.
+    show_progress : bool
+        If True, show progress bar during optimization.
+
+    Returns
+    -------
+    dict
+        Best hyperparameters found.
+
+    Raises
+    ------
+    ImportError
+        If Optuna is not installed.
+    """
+    try:
+        import optuna
+        from optuna.samplers import TPESampler
+    except ImportError:
+        raise ImportError(
+            "Optuna is required for hyperparameter optimization. "
+            "Install it with: pip install optuna"
+        )
+
+    if not HAS_XGBOOST:
+        raise ImportError("XGBoost is required for hyperparameter optimization.")
+
+    if n_cv_folds is None:
+        n_cv_folds = config.model.cv_folds
+
+    # Prepare data
+    df_sorted = df.sort_values("date").reset_index(drop=True)
+    df_clean = df_sorted.dropna()
+    X, y = prepare_features(df_clean)
+
+    logger.info("Starting hyperparameter optimization with %d trials", n_trials)
+
+    def objective(trial: optuna.Trial) -> float:
+        """Optuna objective function."""
+        params = {
+            "max_depth": trial.suggest_int("max_depth", 1, 6),
+            "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.1, log=True),
+            "n_estimators": trial.suggest_int("n_estimators", 50, 300),
+            "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 2.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 3.0),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        }
+
+        # Time-series cross-validation
+        tscv = TimeSeriesSplit(n_splits=n_cv_folds)
+        scores = []
+
+        for train_idx, val_idx in tscv.split(X):
+            X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+
+            model = xgb.XGBRegressor(
+                **params,
+                random_state=config.model.random_state,
+                n_jobs=-1,
+                verbosity=0,
+            )
+            model.fit(X_tr, y_tr)
+            pred = model.predict(X_val)
+            scores.append(mean_absolute_error(y_val, pred))
+
+        return np.mean(scores)
+
+    # Configure Optuna logging
+    if not show_progress:
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    # Create study
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=TPESampler(seed=config.model.random_state),
+    )
+
+    # Run optimization
+    study.optimize(
+        objective,
+        n_trials=n_trials,
+        timeout=timeout,
+        show_progress_bar=show_progress,
+    )
+
+    best_params = study.best_params
+    logger.info("Best MAE: %.4f", study.best_value)
+    logger.info("Best parameters: %s", best_params)
+
+    return best_params
+
+
 def compare_models(df: pd.DataFrame, test_size: float = 0.2) -> pd.DataFrame:
     """Train and compare multiple models.
 
@@ -572,24 +707,91 @@ def plot_cv_results(cv_results: List[CVResult], save_path: Optional[Path] = None
     plt.close()
 
 
-def save_model(result: TrainingResult, path: Path) -> None:
-    """Save a trained model to disk."""
+def save_model(
+    result: TrainingResult,
+    path: Path,
+    seasons: Optional[List[str]] = None,
+    use_artifact: bool = True,
+) -> None:
+    """Save a trained model to disk.
+
+    Parameters
+    ----------
+    result : TrainingResult
+        The training result to save.
+    path : Path
+        Path to save the model (without extension if use_artifact=True).
+    seasons : list of str, optional
+        Seasons used for training data (for metadata).
+    use_artifact : bool
+        If True, save as artifact with metadata (recommended).
+        If False, use legacy format for backwards compatibility.
+    """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({
-        "model": result.model,
-        "model_type": result.model_type,
-        "feature_names": result.feature_names,
-    }, path)
-    print(f"Model saved to {path}")
+
+    if use_artifact:
+        from .artifacts import ModelArtifact
+        artifact = ModelArtifact.from_training_result(result, seasons=seasons)
+        artifact.save(path)
+        logger.info("Model artifact saved to %s", path)
+    else:
+        # Legacy format for backwards compatibility
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump({
+            "model": result.model,
+            "model_type": result.model_type,
+            "feature_names": result.feature_names,
+        }, path)
+        logger.info("Model saved to %s (legacy format)", path)
 
 
 def load_model(path: Path) -> Tuple[Any, str, List[str]]:
     """Load a trained model from disk.
 
+    Supports both legacy format (.joblib) and new artifact format.
+
+    Parameters
+    ----------
+    path : Path
+        Path to the model file.
+
     Returns
     -------
     model, model_type, feature_names
     """
+    path = Path(path)
+
+    # Check if this is an artifact (has .json metadata file)
+    metadata_path = path.with_suffix(".json")
+    if metadata_path.exists() or not path.suffix:
+        # Try loading as artifact
+        try:
+            from .artifacts import ModelArtifact
+            artifact = ModelArtifact.load(path)
+            return artifact.model, artifact.metadata.model_type, artifact.metadata.feature_names
+        except Exception:
+            pass
+
+    # Fall back to legacy format
+    if path.suffix != ".joblib":
+        path = path.with_suffix(".joblib")
+
     data = joblib.load(path)
     return data["model"], data.get("model_type", "Unknown"), data["feature_names"]
+
+
+def load_artifact(path: Path) -> "ModelArtifact":
+    """Load a model artifact with full metadata.
+
+    Parameters
+    ----------
+    path : Path
+        Path to the artifact (without extension).
+
+    Returns
+    -------
+    ModelArtifact
+        Complete artifact with model and metadata.
+    """
+    from .artifacts import ModelArtifact
+    return ModelArtifact.load(path)

@@ -27,8 +27,27 @@ import pandas as pd
 import requests
 from tqdm import tqdm
 
-API_BASE = "https://api-web.nhle.com/v1"
-GOALIE_CACHE_DIR = Path("data/goalies")
+from .config import config
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
+API_BASE = config.data.api_base
+GOALIE_CACHE_DIR = config.data.goalie_cache_dir
+
+
+def _parse_toi_to_seconds(toi: str) -> int:
+    """Parse TOI string like 'MM:SS' or 'H:MM:SS' to total seconds."""
+    if not toi:
+        return 0
+    parts = toi.split(":")
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return int(minutes) * 60 + int(seconds)
+    elif len(parts) == 3:
+        hours, minutes, seconds = parts
+        return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+    return 0
 
 
 def fetch_game_goalies(game_id: int) -> Dict:
@@ -66,9 +85,9 @@ def fetch_game_goalies(game_id: int) -> Dict:
                 starter = g
                 break
 
-        # If no starter flag, use goalie with most TOI
+        # If no starter flag, use goalie with most TOI (parse to seconds for proper comparison)
         if starter is None and goalies:
-            starter = max(goalies, key=lambda x: x.get("toi", "00:00"))
+            starter = max(goalies, key=lambda x: _parse_toi_to_seconds(x.get("toi", "00:00")))
 
         if starter:
             result[f"{side}_goalie_id"] = starter.get("playerId")
@@ -90,7 +109,7 @@ def fetch_game_goalies(game_id: int) -> Dict:
 
 def fetch_goalies_for_games(
     game_ids: List[int],
-    delay: float = 0.05,
+    delay: float | None = None,
     cache_path: Optional[Path] = None,
 ) -> pd.DataFrame:
     """Fetch goalie data for multiple games.
@@ -109,6 +128,9 @@ def fetch_goalies_for_games(
     pd.DataFrame
         Goalie data for each game.
     """
+    if delay is None:
+        delay = config.data.goalie_request_delay
+
     # Check cache
     if cache_path and cache_path.exists():
         cached = pd.read_csv(cache_path)
@@ -116,7 +138,7 @@ def fetch_goalies_for_games(
         game_ids = [g for g in game_ids if g not in cached_ids]
         if not game_ids:
             return cached
-        print(f"Found {len(cached)} cached, fetching {len(game_ids)} new games")
+        logger.info("Found %d cached, fetching %d new games", len(cached), len(game_ids))
     else:
         cached = pd.DataFrame()
 
@@ -128,11 +150,12 @@ def fetch_goalies_for_games(
             data = fetch_game_goalies(game_id)
             results.append(data)
         except Exception as e:
+            logger.warning("Failed to fetch goalie data for game %d: %s", game_id, e)
             failed.append(game_id)
         time.sleep(delay)
 
     if failed:
-        print(f"Failed to fetch {len(failed)} games")
+        logger.warning("Failed to fetch %d games total", len(failed))
 
     if results:
         new_df = pd.DataFrame(results)
@@ -142,22 +165,107 @@ def fetch_goalies_for_games(
         if cache_path:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             combined.to_csv(cache_path, index=False)
-            print(f"Cached {len(combined)} games to {cache_path}")
+            logger.info("Cached %d games to %s", len(combined), cache_path)
 
         return combined
 
     return cached if not cached.empty else pd.DataFrame()
 
 
+def _compute_goalie_rolling_for_side(
+    df: pd.DataFrame,
+    side: str,
+    window: int,
+) -> pd.DataFrame:
+    """Compute rolling goalie stats for one side (home or away).
+
+    This is a vectorized helper that uses groupby/transform instead of iterrows.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with goalie data merged in.
+    side : str
+        "home" or "away".
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with rolling stats columns added.
+    """
+    goalie_col = f"{side}_goalie_id"
+    saves_col = f"{side}_saves"
+    shots_col = f"{side}_shots_against"
+    goals_col = f"{side}_goals_against"
+
+    # Create a goalie-game dataframe for this side
+    goalie_games = df[["gamePk", "date", goalie_col, saves_col, shots_col, goals_col]].copy()
+    goalie_games = goalie_games.rename(columns={
+        goalie_col: "goalie_id",
+        saves_col: "saves",
+        shots_col: "shots",
+        goals_col: "goals_against",
+    })
+
+    # Remove rows without goalie data
+    goalie_games = goalie_games.dropna(subset=["goalie_id"])
+    goalie_games["goalie_id"] = goalie_games["goalie_id"].astype(int)
+
+    # Sort by date for proper rolling calculations
+    goalie_games = goalie_games.sort_values("date").reset_index(drop=True)
+
+    # Compute rolling stats per goalie using shift(1) to avoid data leakage
+    grouped = goalie_games.groupby("goalie_id")
+
+    # Rolling sums for save percentage calculation
+    goalie_games["rolling_saves"] = grouped["saves"].transform(
+        lambda x: x.shift(1).rolling(window, min_periods=1).sum()
+    )
+    goalie_games["rolling_shots"] = grouped["shots"].transform(
+        lambda x: x.shift(1).rolling(window, min_periods=1).sum()
+    )
+
+    # Rolling sum for GAA calculation
+    goalie_games["rolling_goals"] = grouped["goals_against"].transform(
+        lambda x: x.shift(1).rolling(window, min_periods=1).sum()
+    )
+    # Use rolling count within window, not cumulative count
+    goalie_games["rolling_games"] = grouped["goals_against"].transform(
+        lambda x: x.shift(1).rolling(window, min_periods=1).count()
+    )
+
+    # Compute save percentage: total_saves / total_shots
+    goalie_games[f"{side}_goalie_sv_pct"] = np.where(
+        goalie_games["rolling_shots"] > 0,
+        goalie_games["rolling_saves"] / goalie_games["rolling_shots"],
+        np.nan
+    )
+
+    # Compute GAA: total_goals / games_played (within rolling window)
+    goalie_games[f"{side}_goalie_gaa"] = np.where(
+        goalie_games["rolling_games"] > 0,
+        goalie_games["rolling_goals"] / goalie_games["rolling_games"],
+        np.nan
+    )
+
+    # Return only the columns we need for merging
+    return goalie_games[["gamePk", f"{side}_goalie_sv_pct", f"{side}_goalie_gaa"]]
+
+
 def compute_goalie_rolling_stats(
     df: pd.DataFrame,
     goalie_df: pd.DataFrame,
-    window: int = 10,
+    window: int | None = None,
 ) -> pd.DataFrame:
     """Add rolling goalie statistics to the game DataFrame.
 
     For each game, computes the starting goalie's rolling save percentage
     and goals against average based on their previous games.
+
+    This implementation uses vectorized pandas operations (groupby/transform)
+    instead of row-by-row iteration for significantly better performance.
 
     Parameters
     ----------
@@ -173,79 +281,31 @@ def compute_goalie_rolling_stats(
     pd.DataFrame
         Original df with added goalie feature columns.
     """
+    if window is None:
+        window = config.features.goalie_window
+
     # Merge goalie data
     df = df.merge(goalie_df, on="gamePk", how="left")
 
     # Sort by date
     df = df.sort_values("date").reset_index(drop=True)
 
-    # Track each goalie's cumulative stats
-    goalie_history: Dict[int, List[Dict]] = {}
+    # Compute rolling stats for each side using vectorized operations
+    home_stats = _compute_goalie_rolling_for_side(df, "home", window)
+    away_stats = _compute_goalie_rolling_for_side(df, "away", window)
 
-    # New columns to add
-    home_rolling_sv = []
-    away_rolling_sv = []
-    home_rolling_gaa = []
-    away_rolling_gaa = []
-
-    for _, row in df.iterrows():
-        for side, sv_list, gaa_list in [
-            ("home", home_rolling_sv, home_rolling_gaa),
-            ("away", away_rolling_sv, away_rolling_gaa),
-        ]:
-            goalie_id = row.get(f"{side}_goalie_id")
-
-            if pd.isna(goalie_id) or goalie_id is None:
-                sv_list.append(np.nan)
-                gaa_list.append(np.nan)
-                continue
-
-            goalie_id = int(goalie_id)
-            history = goalie_history.get(goalie_id, [])
-
-            # Compute rolling stats from history
-            if len(history) >= 1:
-                recent = history[-window:]
-                total_saves = sum(g["saves"] for g in recent)
-                total_shots = sum(g["shots"] for g in recent)
-                total_goals = sum(g["goals_against"] for g in recent)
-                games_played = len(recent)
-
-                sv_pct = total_saves / total_shots if total_shots > 0 else 0.9
-                gaa = (total_goals / games_played) if games_played > 0 else 3.0
-
-                sv_list.append(sv_pct)
-                gaa_list.append(gaa)
-            else:
-                # No history yet - use league average
-                sv_list.append(np.nan)
-                gaa_list.append(np.nan)
-
-            # Update history with this game
-            saves = row.get(f"{side}_saves", 0)
-            shots = row.get(f"{side}_shots_against", 0)
-            goals = row.get(f"{side}_goals_against", 0)
-
-            if not pd.isna(saves):
-                goalie_history.setdefault(goalie_id, []).append({
-                    "saves": int(saves),
-                    "shots": int(shots),
-                    "goals_against": int(goals),
-                })
-
-    df["home_goalie_sv_pct"] = home_rolling_sv
-    df["away_goalie_sv_pct"] = away_rolling_sv
-    df["home_goalie_gaa"] = home_rolling_gaa
-    df["away_goalie_gaa"] = away_rolling_gaa
+    # Merge rolling stats back to main dataframe
+    df = df.merge(home_stats, on="gamePk", how="left")
+    df = df.merge(away_stats, on="gamePk", how="left")
 
     return df
 
 
 def add_goalie_features(
     df: pd.DataFrame,
-    goalie_cache_path: Path = GOALIE_CACHE_DIR / "goalie_stats.csv",
+    goalie_cache_path: Path | None = None,
     fetch_missing: bool = True,
-    delay: float = 0.05,
+    delay: float | None = None,
 ) -> pd.DataFrame:
     """Main entry point: add goalie features to game data.
 
@@ -253,18 +313,21 @@ def add_goalie_features(
     ----------
     df : pd.DataFrame
         Game data with gamePk column.
-    goalie_cache_path : Path
-        Path to cache goalie data.
+    goalie_cache_path : Path, optional
+        Path to cache goalie data. Defaults to config path.
     fetch_missing : bool
         If True, fetch missing goalie data from API.
-    delay : float
-        Delay between API requests.
+    delay : float, optional
+        Delay between API requests. Defaults to config value.
 
     Returns
     -------
     pd.DataFrame
         Game data with goalie features added.
     """
+    if goalie_cache_path is None:
+        goalie_cache_path = config.data.goalie_cache_path
+
     game_ids = df["gamePk"].tolist()
 
     if fetch_missing:
@@ -277,11 +340,11 @@ def add_goalie_features(
         if goalie_cache_path.exists():
             goalie_df = pd.read_csv(goalie_cache_path)
         else:
-            print("No goalie cache found and fetch_missing=False")
+            logger.warning("No goalie cache found and fetch_missing=False")
             return df
 
     if goalie_df.empty:
-        print("No goalie data available")
+        logger.warning("No goalie data available")
         return df
 
-    return compute_goalie_rolling_stats(df, goalie_df, window=10)
+    return compute_goalie_rolling_stats(df, goalie_df)

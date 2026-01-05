@@ -28,6 +28,12 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
+from .config import config
+from .logging_config import get_logger
+from .validation import validate_game_data
+
+logger = get_logger(__name__)
+
 
 def _build_team_game_log(df: pd.DataFrame) -> pd.DataFrame:
     """Convert game-level data to team-game-level data.
@@ -156,12 +162,82 @@ def _compute_rolling_features(team_log: pd.DataFrame, window: int = 5) -> pd.Dat
     return team_log
 
 
+def _compute_h2h_features(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+    """Compute head-to-head historical features.
+
+    For each game, computes the rolling average total goals in previous
+    matchups between the same two teams.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Game data with homeTeam, awayTeam, date, totalGoals columns.
+    window : int
+        Number of previous matchups to use for rolling average.
+
+    Returns
+    -------
+    pd.DataFrame
+        Original df with h2h_avg_goals column added.
+    """
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # Create a consistent matchup key (alphabetical order)
+    df["matchup"] = df.apply(
+        lambda r: tuple(sorted([r["homeTeam"], r["awayTeam"]])),
+        axis=1,
+    )
+
+    # Compute rolling average goals for each matchup
+    # Use shift(1) to avoid data leakage
+    df["h2h_avg_goals"] = df.groupby("matchup")["totalGoals"].transform(
+        lambda x: x.shift(1).rolling(window, min_periods=1).mean()
+    )
+
+    # Drop intermediate column
+    df = df.drop(columns=["matchup"])
+
+    return df
+
+
+def _compute_venue_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    """Compute venue-specific features.
+
+    For each game, computes the rolling average total goals at the home team's
+    venue (arena) based on previous games there.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Game data with homeTeam, date, totalGoals columns.
+    window : int
+        Number of previous games at venue to use for rolling average.
+
+    Returns
+    -------
+    pd.DataFrame
+        Original df with venue_avg_goals column added.
+    """
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # Use homeTeam as proxy for venue (each team has one home arena)
+    df["venue_avg_goals"] = df.groupby("homeTeam")["totalGoals"].transform(
+        lambda x: x.shift(1).rolling(window, min_periods=1).mean()
+    )
+
+    return df
+
+
 def add_features(
     df: pd.DataFrame,
     *,
-    window: int = 5,
-    min_games: int = 3,
-    include_goalies: bool = False,
+    window: int | None = None,
+    min_games: int | None = None,
+    include_goalies: bool | None = None,
 ) -> pd.DataFrame:
     """Add all features to the game dataset.
 
@@ -175,21 +251,32 @@ def add_features(
         Raw game logs with columns: gamePk, date, homeTeam, awayTeam,
         homeScore, awayScore, totalGoals.
     window : int, optional
-        Number of prior games for rolling averages. Default is 5.
+        Number of prior games for rolling averages. Defaults to config value.
     min_games : int, optional
         Minimum games a team must have played before features are valid.
-        Games before this threshold will have NaN features. Default is 3.
+        Games before this threshold will have NaN features. Defaults to config value.
     include_goalies : bool, optional
         If True, add goalie features (requires goalie data to be fetched).
-        Default is False.
+        Defaults to config value.
 
     Returns
     -------
     pd.DataFrame
         Original data with added feature columns for both home and away teams.
     """
+    # Apply config defaults
+    if window is None:
+        window = config.features.rolling_window
+    if min_games is None:
+        min_games = config.features.min_games
+    if include_goalies is None:
+        include_goalies = config.features.include_goalies
+
     if df.empty:
         return df.copy()
+
+    # Validate input data
+    validate_game_data(df)
 
     # Build team-level game log
     team_log = _build_team_game_log(df)
@@ -232,7 +319,13 @@ def add_features(
             from .goalies import add_goalie_features
             df_out = add_goalie_features(df_out, fetch_missing=False)
         except Exception as e:
-            print(f"Warning: Could not add goalie features: {e}")
+            logger.warning("Could not add goalie features: %s", e)
+
+    # Add head-to-head features
+    df_out = _compute_h2h_features(df_out, window=window // 2)  # Use half window for H2H
+
+    # Add venue-specific features
+    df_out = _compute_venue_features(df_out, window=window)
 
     # Sort by date
     df_out = df_out.sort_values("date").reset_index(drop=True)

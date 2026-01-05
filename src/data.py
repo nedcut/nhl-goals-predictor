@@ -32,15 +32,18 @@ import pandas as pd
 import requests
 from tqdm import tqdm
 
-# API base URL (new NHL API as of 2023)
-API_BASE = "https://api-web.nhle.com/v1"
+from .config import config
+from .logging_config import get_logger
 
-# Default cache directory
-CACHE_DIR = Path("data/raw")
+logger = get_logger(__name__)
+
+# Use config for API and cache settings
+API_BASE = config.data.api_base
+CACHE_DIR = config.data.cache_dir
 
 # Season start dates (approximate - October of first year)
-SEASON_START_MONTH = 10
-SEASON_END_MONTH = 6  # June of second year (playoffs end)
+SEASON_START_MONTH = config.data.season_start_month
+SEASON_END_MONTH = config.data.season_end_month
 
 
 def _season_to_years(season: str) -> tuple[int, int]:
@@ -56,13 +59,15 @@ def _get_season_date_range(season: str) -> tuple[datetime, datetime]:
     return start_date, end_date
 
 
-def fetch_schedule_week(date: str) -> List[dict]:
+def fetch_schedule_week(date: str, include_upcoming: bool = False) -> List[dict]:
     """Fetch schedule for the week containing the given date.
 
     Parameters
     ----------
     date : str
         Date in YYYY-MM-DD format.
+    include_upcoming : bool
+        If True, include scheduled/upcoming games (not just completed).
 
     Returns
     -------
@@ -74,11 +79,18 @@ def fetch_schedule_week(date: str) -> List[dict]:
     resp.raise_for_status()
     data = resp.json()
 
+    # Game states: OFF/FINAL = completed, FUT = future, PRE = pre-game, LIVE = in progress
+    completed_states = ("OFF", "FINAL")
+    upcoming_states = ("FUT", "PRE", "LIVE")
+
     games = []
     for day in data.get("gameWeek", []):
         for game in day.get("games", []):
-            # Only include completed games
-            if game.get("gameState") in ("OFF", "FINAL"):
+            game_state = game.get("gameState")
+            is_completed = game_state in completed_states
+            is_upcoming = game_state in upcoming_states
+
+            if is_completed or (include_upcoming and is_upcoming):
                 games.append({
                     "gamePk": game["id"],
                     "season": str(game["season"]),
@@ -89,11 +101,12 @@ def fetch_schedule_week(date: str) -> List[dict]:
                     "homeScore": game["homeTeam"].get("score", 0),
                     "awayScore": game["awayTeam"].get("score", 0),
                     "totalGoals": game["homeTeam"].get("score", 0) + game["awayTeam"].get("score", 0),
+                    "gameState": game_state,
                 })
     return games
 
 
-def fetch_season_games(season: str, delay: float = 0.2) -> pd.DataFrame:
+def fetch_season_games(season: str, delay: float | None = None) -> pd.DataFrame:
     """Fetch all games for a single NHL season.
 
     Parameters
@@ -108,6 +121,9 @@ def fetch_season_games(season: str, delay: float = 0.2) -> pd.DataFrame:
     pd.DataFrame
         DataFrame with one row per game.
     """
+    if delay is None:
+        delay = config.data.request_delay
+
     start_date, end_date = _get_season_date_range(season)
 
     all_games = []
@@ -127,8 +143,8 @@ def fetch_season_games(season: str, delay: float = 0.2) -> pd.DataFrame:
                     seen_ids.add(game["gamePk"])
             pbar.update(1)
         except requests.RequestException as e:
-            # Skip weeks with errors (e.g., lockout periods)
-            pass
+            # Log the error but continue (some weeks may fail during lockouts)
+            logger.warning("Failed to fetch schedule for %s: %s", date_str, e)
 
         # Move forward 7 days (schedule endpoint returns a week)
         current_date += timedelta(days=7)
@@ -162,13 +178,13 @@ def save_season_cache(df: pd.DataFrame, season: str, cache_dir: Path = CACHE_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = get_cache_path(season, cache_dir)
     df.to_csv(path, index=False)
-    print(f"Cached {len(df)} games to {path}")
+    logger.info("Cached %d games to %s", len(df), path)
 
 
 def build_dataset(
     seasons: Iterable[str],
-    delay: float = 0.2,
-    use_cache: bool = True
+    delay: float | None = None,
+    use_cache: bool = True,
 ) -> pd.DataFrame:
     """Download game data for one or more seasons.
 
@@ -186,6 +202,9 @@ def build_dataset(
     pd.DataFrame
         Combined schedule and results for all seasons.
     """
+    if delay is None:
+        delay = config.data.request_delay
+
     all_results: List[pd.DataFrame] = []
 
     for season in seasons:
@@ -193,7 +212,7 @@ def build_dataset(
         if use_cache:
             cached = load_cached_season(season)
             if cached is not None:
-                print(f"Loaded {len(cached)} games from cache for {season}")
+                logger.info("Loaded %d games from cache for %s", len(cached), season)
                 all_results.append(cached)
                 continue
 
@@ -201,10 +220,10 @@ def build_dataset(
         df = fetch_season_games(season, delay=delay)
 
         if df.empty:
-            print(f"No games found for {season}")
+            logger.warning("No games found for %s", season)
             continue
 
-        print(f"Fetched {len(df)} games for {season}")
+        logger.info("Fetched %d games for %s", len(df), season)
 
         # Cache for future use
         if use_cache:
