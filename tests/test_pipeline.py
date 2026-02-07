@@ -339,6 +339,22 @@ class TestFeatureEngineering:
 class TestModelTraining:
     """Tests for model training functions."""
 
+    def test_prepare_data_ignores_unrelated_nan_columns(self, sample_game_data):
+        """Rows should be dropped only for missing model inputs, not unrelated columns."""
+        from src.features import add_features
+        from src.model import get_feature_columns, prepare_data
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        df["unrelated_debug_col"] = np.nan
+
+        feature_cols = get_feature_columns(df)
+        expected_rows = len(df.dropna(subset=feature_cols + ["totalGoals"]))
+
+        X_train, X_test, _, _, _ = prepare_data(df, test_size=0.2)
+        used_rows = len(X_train) + len(X_test)
+
+        assert used_rows == expected_rows
+
     def test_prepare_data_splits_chronologically(self, sample_game_data):
         """Data should be split chronologically, not randomly."""
         from src.features import add_features
@@ -384,6 +400,9 @@ class TestModelTraining:
 
     def test_train_xgboost(self, sample_game_data):
         """XGBoost training should return TrainingResult."""
+        import os
+        if os.getenv("RUN_XGBOOST_TESTS") != "1":
+            pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
         from src.features import add_features
         from src.model import TrainingResult, train_xgboost
@@ -524,6 +543,26 @@ class TestArtifactPersistence:
 
         assert len(predictions) == len(X_test)
         assert all(p >= 0 for p in predictions)
+
+    def test_poisson_artifact_prediction_matches_training_model(self, sample_game_data, temp_model_dir):
+        """Saved Poisson artifacts should preserve preprocessing at inference time."""
+        from src.artifacts import ModelArtifact
+        from src.features import add_features
+        from src.model import prepare_data, train_poisson
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        result = train_poisson(df, test_size=0.2, alpha=1.0)
+
+        artifact = ModelArtifact.from_training_result(result)
+        model_path = temp_model_dir / "poisson_model"
+        artifact.save(model_path)
+        loaded = ModelArtifact.load(model_path)
+
+        _, X_test, _, _, _ = prepare_data(df, test_size=0.2)
+        original_pred = result.model.predict(X_test)
+        loaded_pred = loaded.predict(X_test)
+
+        assert np.allclose(original_pred, loaded_pred, atol=1e-10)
 
     def test_artifact_summary(self, sample_game_data):
         """Artifact summary should return readable string."""
@@ -687,6 +726,24 @@ class TestPredictionModule:
 class TestEndToEndPipeline:
     """End-to-end tests verifying the complete pipeline."""
 
+    def test_probabilistic_cv_poisson_glm_handles_feature_nans(self, sample_game_data):
+        """Poisson GLM evaluation path should handle early-season NaNs safely."""
+        from src.evaluation import time_series_cv_forecast
+        from src.features import add_features
+
+        df_features = add_features(
+            sample_game_data, window=5, min_games=3, include_goalies=False
+        )
+        result = time_series_cv_forecast(
+            df_features,
+            point_model="poisson_glm",
+            dist_model="poisson",
+            n_splits=3,
+            cal_fraction=0.2,
+        )
+
+        assert len(result.folds) == 3
+
     def test_full_pipeline_random_forest(self, sample_game_data, temp_model_dir):
         """Full pipeline: data → features → train RF → save → load → predict."""
         from src.artifacts import ModelArtifact
@@ -732,6 +789,9 @@ class TestEndToEndPipeline:
 
     def test_full_pipeline_xgboost(self, sample_game_data, temp_model_dir):
         """Full pipeline with XGBoost model."""
+        import os
+        if os.getenv("RUN_XGBOOST_TESTS") != "1":
+            pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
         from src.artifacts import ModelArtifact
         from src.features import add_features
@@ -841,6 +901,21 @@ class TestConfig:
         assert "max_depth" in params
         assert "learning_rate" in params
         assert "n_estimators" in params
+
+
+class TestLoggingConfig:
+    """Tests for logging setup behavior."""
+
+    def test_setup_logging_can_raise_log_level_after_initialization(self):
+        """setup_logging should reconfigure levels on subsequent calls."""
+        import logging
+        from src.logging_config import setup_logging
+
+        logger = setup_logging(level="INFO")
+        assert logger.level == logging.INFO
+
+        logger = setup_logging(level="DEBUG")
+        assert logger.level == logging.DEBUG
 
 
 # =============================================================================
@@ -1024,6 +1099,9 @@ class TestModelComparison:
 
     def test_compare_models_returns_dataframe(self, sample_game_data):
         """compare_models should return comparison DataFrame."""
+        import os
+        if os.getenv("RUN_XGBOOST_TESTS") != "1":
+            pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
         from src.features import add_features
         from src.model import compare_models

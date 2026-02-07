@@ -55,18 +55,23 @@ def setup_logging(
 
     # Get the package root logger
     logger = logging.getLogger("nhl_predictor")
+    logger_level = getattr(logging, level.upper())
 
-    # Only configure once
+    # If already configured, allow dynamic level updates (e.g. --verbose CLI flag).
     if _logging_configured:
+        logger.setLevel(logger_level)
+        for handler in logger.handlers:
+            handler.setLevel(logger_level)
         return logger
 
-    logger.setLevel(getattr(logging, level.upper()))
+    logger.setLevel(logger_level)
 
     # Create formatter
     formatter = logging.Formatter(format_string, datefmt=LOG_DATE_FORMAT)
 
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logger_level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
@@ -75,6 +80,7 @@ def setup_logging(
         log_file = Path(log_file)
         log_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logger_level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
