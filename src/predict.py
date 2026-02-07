@@ -19,10 +19,20 @@ from typing import List, Optional
 import pandas as pd
 
 from .artifacts import ModelArtifact
+from .conformal import split_conformal_interval
 from .config import config
 from .data import build_dataset, fetch_schedule_week
 from .features import add_features
 from .logging_config import get_logger, setup_logging
+from .probabilistic import (
+    discrete_quantile_from_pmf,
+    fit_nb2_alpha,
+    fit_poisson_mixture,
+    nb2_pmf_matrix,
+    poisson_mixture_pmf_matrix,
+    poisson_pmf_matrix,
+    prob_over_from_pmf,
+)
 
 logger = get_logger(__name__)
 
@@ -161,6 +171,126 @@ def predict_games(
     return results
 
 
+def predict_games_probabilistic(
+    upcoming_df: pd.DataFrame,
+    model_path: Path,
+    historical_df: pd.DataFrame,
+    *,
+    dist_model: str = "nb2",
+    thresholds: Optional[List[float]] = None,
+    max_goals: int = 20,
+    cal_fraction: float = 0.2,
+) -> pd.DataFrame:
+    """Probabilistic predictions for upcoming games.
+
+    Returns columns:
+      - mu (expected total goals)
+      - p_over_{threshold}
+      - pi80_low/pi80_high (80% predictive interval from the chosen distribution)
+      - conformal90_low/conformal90_high (split-conformal interval from historical residuals)
+      - pmf (list[float] over {0..max_goals})
+    """
+    if thresholds is None:
+        thresholds = [5.5, 6.5, 7.5]
+
+    artifact = ModelArtifact.load(model_path)
+    expected_features = artifact.metadata.feature_names
+
+    upcoming_df = upcoming_df.copy()
+    upcoming_df["_is_upcoming"] = True
+    if "homeScore" not in upcoming_df.columns:
+        upcoming_df["homeScore"] = pd.NA
+        upcoming_df["awayScore"] = pd.NA
+        upcoming_df["totalGoals"] = pd.NA
+
+    historical_df = historical_df.copy()
+    historical_df["_is_upcoming"] = False
+
+    combined = pd.concat([historical_df, upcoming_df], ignore_index=True)
+    combined = combined.drop_duplicates(subset=["gamePk"], keep="first")
+    combined = add_features(combined, include_goalies=False)
+
+    # Helper: build aligned feature matrix with simple imputation
+    def build_X(frame: pd.DataFrame) -> pd.DataFrame:
+        X = frame.reindex(columns=expected_features).copy()
+        for col in X.columns:
+            if X[col].isna().any():
+                m = X[col].mean()
+                X[col] = X[col].fillna(m if pd.notna(m) else 0.0)
+        return X
+
+    # Calibrate dispersion and conformal radius using historical games only
+    hist = combined[combined["_is_upcoming"] == False].copy()  # noqa: E712
+    hist = hist.dropna(subset=["totalGoals"]).sort_values("date").reset_index(drop=True)
+    hist = hist.dropna(subset=expected_features)
+    if hist.empty:
+        raise ValueError("No historical rows with complete features for calibration.")
+
+    n_hist = len(hist)
+    cal_size = max(1, int(cal_fraction * n_hist))
+    cal_df = hist.iloc[n_hist - cal_size :].copy()
+    X_cal = build_X(cal_df)
+    y_cal = cal_df["totalGoals"].to_numpy(dtype=float)
+    mu_cal = artifact.predict(X_cal)
+
+    nb2_alpha = None
+    mix_w = None
+    mix_m = None
+    if dist_model == "poisson":
+        pass
+    elif dist_model == "nb2":
+        nb2_alpha = fit_nb2_alpha(y_cal, mu_cal)
+    elif dist_model == "poisson_mixture":
+        mix_w, mix_m = fit_poisson_mixture(y_cal, mu_cal, max_goals=max_goals)
+    else:
+        raise ValueError(f"Unknown dist_model: {dist_model}")
+
+    # Conformal 90% interval radius (simple split-conformal on calibration slice)
+    _, _, q90 = split_conformal_interval(y_cal, mu_cal, mu_cal, alpha=0.1, clip_lower=0.0)
+
+    # Forecast upcoming
+    upcoming_ids = set(upcoming_df["gamePk"])
+    up = combined[combined["gamePk"].isin(upcoming_ids)].copy()
+    if up.empty:
+        return pd.DataFrame()
+
+    X_up = build_X(up)
+    mu_up = artifact.predict(X_up)
+
+    if dist_model == "poisson":
+        pmf = poisson_pmf_matrix(mu_up, max_goals=max_goals)
+    elif dist_model == "nb2":
+        pmf = nb2_pmf_matrix(mu_up, alpha=float(nb2_alpha), max_goals=max_goals)
+    else:
+        pmf = poisson_mixture_pmf_matrix(mu_up, weight=float(mix_w), multiplier=float(mix_m), max_goals=max_goals)
+
+    results = up[["date", "homeTeam", "awayTeam"]].copy()
+    results["mu"] = mu_up.astype(float)
+
+    for t in thresholds:
+        results[f"p_over_{t:g}"] = prob_over_from_pmf(pmf, threshold=t)
+
+    # Distributional predictive interval (80%)
+    results["pi80_low"] = discrete_quantile_from_pmf(pmf, 0.10).astype(int)
+    results["pi80_high"] = discrete_quantile_from_pmf(pmf, 0.90).astype(int)
+
+    # Conformal interval around the mean (90%)
+    results["conformal90_low"] = (results["mu"] - q90).clip(lower=0.0)
+    results["conformal90_high"] = results["mu"] + q90
+
+    # Store full PMF for API use
+    results["pmf"] = [row.tolist() for row in pmf]
+    results["max_goals"] = max_goals
+    results["dist_model"] = dist_model
+    if nb2_alpha is not None:
+        results["nb2_alpha"] = float(nb2_alpha)
+    if mix_w is not None:
+        results["mix_weight"] = float(mix_w)
+        results["mix_multiplier"] = float(mix_m)
+
+    return results
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     """Main entry point for the prediction CLI."""
     parser = argparse.ArgumentParser(
@@ -196,6 +326,30 @@ def main(argv: Optional[List[str]] = None) -> None:
         action="store_true",
         help="Enable verbose output",
     )
+    parser.add_argument(
+        "--probabilistic",
+        action="store_true",
+        help="Output distributional forecasts (over/under probabilities + intervals)",
+    )
+    parser.add_argument(
+        "--dist-model",
+        choices=["poisson", "nb2", "poisson_mixture"],
+        default="nb2",
+        help="Distribution family for probabilistic forecasts",
+    )
+    parser.add_argument(
+        "--thresholds",
+        nargs="+",
+        type=float,
+        default=[5.5, 6.5, 7.5],
+        help="Over/under thresholds (e.g., 5.5 6.5 7.5)",
+    )
+    parser.add_argument(
+        "--max-goals",
+        type=int,
+        default=20,
+        help="Max goals support for PMF (0..max_goals)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -223,12 +377,22 @@ def main(argv: Optional[List[str]] = None) -> None:
     logger.info("Found %d upcoming games", len(upcoming))
 
     # Make predictions
-    predictions = predict_games(
-        upcoming,
-        args.model,
-        historical,
-        seasons=args.seasons,
-    )
+    if args.probabilistic:
+        predictions = predict_games_probabilistic(
+            upcoming,
+            args.model,
+            historical,
+            dist_model=args.dist_model,
+            thresholds=args.thresholds,
+            max_goals=args.max_goals,
+        )
+    else:
+        predictions = predict_games(
+            upcoming,
+            args.model,
+            historical,
+            seasons=args.seasons,
+        )
 
     if predictions.empty:
         print("Could not generate predictions.")
@@ -243,7 +407,19 @@ def main(argv: Optional[List[str]] = None) -> None:
         print("=" * 60)
         for _, row in predictions.iterrows():
             print(f"{row['date']}: {row['awayTeam']} @ {row['homeTeam']}")
-            print(f"  Predicted Total Goals: {row['predicted_total_goals']:.1f}")
+            if args.probabilistic:
+                mu = float(row["mu"])
+                print(f"  E[goals]: {mu:.2f}")
+                for t in args.thresholds:
+                    key = f"p_over_{t:g}"
+                    if key in row:
+                        print(f"  P(> {t:g}): {float(row[key]):.3f}")
+                print(f"  PI80: [{int(row['pi80_low'])}, {int(row['pi80_high'])}]")
+                print(
+                    f"  Conformal90: [{float(row['conformal90_low']):.2f}, {float(row['conformal90_high']):.2f}]"
+                )
+            else:
+                print(f"  Predicted Total Goals: {row['predicted_total_goals']:.1f}")
         print("=" * 60)
         print(f"\nTotal: {len(predictions)} games")
 

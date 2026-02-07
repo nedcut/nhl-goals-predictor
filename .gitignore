@@ -19,3 +19,7 @@ models/
 # IDE
 .vscode/
 .idea/
+
+# Local environments and generated reports
+.venv/
+reports/

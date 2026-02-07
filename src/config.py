@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Tuple
 
 
 @dataclass
@@ -56,8 +56,9 @@ class DataConfig:
 class FeatureConfig:
     """Configuration for feature engineering."""
 
-    # Rolling window sizes
-    rolling_window: int = 20  # Window for team rolling stats (20 is optimal)
+    # Rolling window sizes (multiple windows capture different signals)
+    rolling_windows: Tuple[int, ...] = (5, 10, 20, 40)  # Short, medium, long-term
+    rolling_window: int = 20  # Default/primary window for backwards compatibility
     goalie_window: int = 10  # Window for goalie rolling stats
 
     # Minimum history requirements
@@ -65,6 +66,13 @@ class FeatureConfig:
 
     # Feature flags
     include_goalies: bool = True
+    include_multi_window: bool = True  # Use multiple rolling windows
+    include_interactions: bool = True  # Add interaction features
+    include_temporal: bool = True  # Add month/seasonality features
+
+    # Season reference date (October 1st typically)
+    season_start_month: int = 10
+    season_start_day: int = 1
 
 
 @dataclass

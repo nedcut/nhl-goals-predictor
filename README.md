@@ -1,6 +1,7 @@
-# NHL Total Goals Prediction
+# NHL Total Goals Forecasting (Probabilistic)
 
-A machine learning pipeline for predicting total goals in NHL games. The model uses team rolling statistics, goaltender performance metrics, and head-to-head history to beat the naive baseline.
+A production-minded pipeline for **probabilistic forecasting** of NHL total goals.
+Instead of only predicting a point estimate, it can produce a full distribution over goal totals (e.g., **P(over 6.5)**), evaluate with proper scoring rules, and ship an API + dashboard for nightly inference.
 
 ## Results
 
@@ -10,7 +11,7 @@ A machine learning pipeline for predicting total goals in NHL games. The model u
 | Baseline MAE | 1.894 |
 | **Improvement** | **+0.6%** |
 
-The model consistently outperforms predicting the historical mean across 5-fold time-series cross-validation.
+The repo includes honest **time-series cross-validation** plus **log score / CRPS** evaluation for distribution forecasts via `python -m src.evaluate`.
 
 ## Features
 
@@ -22,10 +23,26 @@ The model consistently outperforms predicting the historical mean across 5-fold 
 - **Head-to-head historical matchup stats** (new)
 - **Venue-specific scoring trends** (new)
 
+## Probabilistic Forecasting
+
+Given a point forecast `mu = E[total_goals]`, the project can emit a discrete distribution over totals:
+- Poisson
+- Negative Binomial (NB2; overdispersed vs Poisson)
+- Poisson mixture (extra dispersion / heavy tails)
+
+From the distribution you get:
+- `P(total_goals > 6.5)`, `P(total_goals > 7.5)`, etc.
+- Predictive intervals (distribution quantiles)
+- Conformal intervals (distribution-free uncertainty around the point forecast)
+
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Create a virtual environment (recommended)
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# Install dependencies (NumPy is pinned <2 for binary compatibility)
 pip install -r requirements.txt
 
 # Run the notebook
@@ -37,6 +54,12 @@ The notebook will:
 2. Fetch starting goalie statistics for all games
 3. Train an optimized XGBoost model
 4. Show feature importance and predictions
+
+Run tests:
+
+```bash
+pytest -q
+```
 
 ## Prediction CLI
 
@@ -53,6 +76,25 @@ python -m src.predict --output predictions.csv
 python -m src.predict --seasons 20232024 20242025
 ```
 
+Probabilistic forecasts (over/under probabilities + intervals):
+
+```bash
+python -m src.predict --probabilistic --dist-model nb2 --thresholds 5.5 6.5 7.5
+```
+
+## Honest Evaluation (Time-Series CV)
+
+Run expanding-window CV with proper scoring rules and calibration diagnostics:
+
+```bash
+python -m src.evaluate --seasons 20222023 20232024 20242025 --point-model xgb --dist-model nb2
+```
+
+Outputs (saved under `reports/`):
+- Fold metrics + aggregates (`.json`)
+- Reliability curve for `P(total_goals > 6.5)` (`.png`)
+- Randomized PIT histogram for distribution calibration (`.png`)
+
 ## REST API
 
 Run the prediction API server:
@@ -66,8 +108,18 @@ uvicorn src.api:app --reload
 
 **Endpoints:**
 - `GET /predict?days_ahead=7` - Get predictions for upcoming games
+- `GET /predict/probabilistic?days_ahead=7` - Distribution forecast + P(over/under)
+- `GET /dashboard` - Tonight’s slate (simple HTML table)
 - `GET /model/info` - Get model metadata and performance metrics
 - `GET /health` - Health check
+
+## Explainability + Stability
+
+Feature stability across seasons (and optional SHAP summary plots if `shap` is installed):
+
+```bash
+python -m src.explain --seasons 20222023 20232024 20242025 --outdir reports/explain
+```
 
 ## Project Structure
 
@@ -80,6 +132,13 @@ uvicorn src.api:app --reload
 │   ├── model.py        # XGBoost training, CV, Optuna optimization
 │   ├── predict.py      # CLI for predictions
 │   ├── api.py          # FastAPI REST API
+│   ├── probabilistic.py # PMFs, log score, CRPS, calibration helpers
+│   ├── evaluation.py   # Time-series CV with proper scoring rules
+│   ├── evaluate.py     # Evaluation CLI
+│   ├── explainability.py # SHAP (optional) + stability across seasons
+│   ├── explain.py      # Explainability CLI
+│   ├── conformal.py    # Split-conformal intervals
+│   ├── team_strength.py # Shrinkage baseline on team IDs
 │   ├── artifacts.py    # Model persistence with metadata
 │   ├── registry.py     # Model versioning and management
 │   ├── validation.py   # Input validation utilities
@@ -89,6 +148,10 @@ uvicorn src.api:app --reload
 ├── data/               # Cached data (not in git)
 └── models/             # Trained models (not in git)
 ```
+
+## Resume Bullets (Template)
+
+- Built an NHL total-goals **probabilistic forecaster** producing calibrated over/under probabilities (e.g., `P(total_goals > 6.5)`), evaluated with **time-series CV**, **log score**, and calibration diagnostics (reliability + PIT), and shipped a **FastAPI** service with a “Tonight’s slate” dashboard for nightly inference.
 
 ## Hyperparameter Optimization
 
