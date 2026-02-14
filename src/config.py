@@ -88,7 +88,7 @@ class ModelConfig:
     # Random state for reproducibility
     random_state: int = 42
 
-    # Optimized XGBoost hyperparameters (beats baseline by ~0.6%)
+    # Current champion XGBoost hyperparameters under probabilistic time-series CV.
     xgb_params: Dict[str, float | int] = field(default_factory=lambda: {
         "max_depth": 2,
         "learning_rate": 0.01,

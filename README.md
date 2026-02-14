@@ -7,11 +7,15 @@ Instead of only predicting a point estimate, it can produce a full distribution 
 
 | Metric | Value |
 |--------|-------|
-| Test MAE | 1.882 |
-| Baseline MAE | 1.894 |
-| **Improvement** | **+0.6%** |
+| Source-of-truth protocol | Expanding-window time-series CV (5 folds) + NB2 distribution calibration |
+| Data window | Seasons 20222023, 20232024, 20242025 |
+| Champion model | `xgb_current` (default config) |
+| Champion MAE | **1.8760** |
+| Champion CRPS | **1.2976** |
+| Champion Brier (`P(total_goals > 6.5)`) | **0.2469** |
 
-The repo includes honest **time-series cross-validation** plus **log score / CRPS** evaluation for distribution forecasts via `python -m src.evaluate`.
+The project uses this probabilistic CV protocol as the primary model-selection criterion.  
+`xgb_tuned` improved MAE by only `0.0004` but was slightly worse on CRPS/Brier/dist-NLL, so it was not promoted.
 
 ## Features
 
@@ -94,6 +98,7 @@ Outputs (saved under `reports/`):
 - Fold metrics + aggregates (`.json`)
 - Reliability curve for `P(total_goals > 6.5)` (`.png`)
 - Randomized PIT histogram for distribution calibration (`.png`)
+- Champion summary report (`champion_model_report.md`)
 
 ## REST API
 
@@ -151,7 +156,7 @@ python -m src.explain --seasons 20222023 20232024 20242025 --outdir reports/expl
 
 ## Resume Bullets (Template)
 
-- Built an NHL total-goals **probabilistic forecaster** producing calibrated over/under probabilities (e.g., `P(total_goals > 6.5)`), evaluated with **time-series CV**, **log score**, and calibration diagnostics (reliability + PIT), and shipped a **FastAPI** service with a “Tonight’s slate” dashboard for nightly inference.
+- Built an NHL total-goals **probabilistic forecaster** producing calibrated over/under probabilities (e.g., `P(total_goals > 6.5)`), evaluated with **expanding-window time-series CV** and proper scoring rules (**MAE 1.876**, **CRPS 1.298**, Brier **0.247** at 6.5), and shipped a **FastAPI** service with a “Tonight’s slate” dashboard for nightly inference.
 
 ## Hyperparameter Optimization
 
@@ -192,14 +197,15 @@ for model in registry.list_models():
 
 ## Key Findings
 
-1. **Heavy regularization is critical** - max_depth=2, high L1/L2 penalties
-2. **Recent data works best** - 4 seasons (2021-2025) outperforms 11 seasons
-3. **Goalie features matter** - GAA is in top 4 most important features
-4. **Baseline is hard to beat** - NHL scoring is inherently noisy
+1. **Time-series probabilistic CV is the decision authority** - this avoids holdout-only selection bias.
+2. **Default XGBoost config remains champion** - tuning produced a tiny MAE gain (`~0.0004`) but worse probabilistic calibration metrics.
+3. **Team-strength baseline is competitive** - useful as a robust sanity check for overfitting.
+4. **Model gains are modest by nature** - NHL total-goals prediction is high-noise, so consistency and calibration matter as much as point error.
 
-## Optimized Parameters
+## XGBoost Params
 
 ```python
+# Champion (current production/default)
 {
     'max_depth': 2,
     'learning_rate': 0.01,
@@ -209,6 +215,18 @@ for model in registry.list_models():
     'subsample': 0.7,
     'colsample_bytree': 0.7,
     'min_child_weight': 7,
+}
+
+# Tuned candidate (not promoted; weaker CRPS/Brier/dist-NLL)
+{
+    'max_depth': 5,
+    'learning_rate': 0.006926051418392556,
+    'n_estimators': 216,
+    'reg_alpha': 1.4384035226197116,
+    'reg_lambda': 2.642639721292811,
+    'subsample': 0.5143686093013831,
+    'colsample_bytree': 0.7414638228550687,
+    'min_child_weight': 3,
 }
 ```
 
