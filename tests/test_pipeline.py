@@ -233,6 +233,13 @@ class TestFeatureEngineering:
         assert "h2h_avg_goals" in df.columns
         assert "venue_avg_goals" in df.columns
 
+    def test_add_features_default_does_not_require_xg(self, sample_game_data):
+        """Backwards-compatibility: include_xg defaults to False."""
+        from src.features import add_features
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        assert not any(c.startswith("home_avg_xGF_") for c in df.columns)
+
     def test_add_features_preserves_original_columns(self, sample_game_data):
         """Original columns should be preserved after adding features."""
         from src.features import add_features

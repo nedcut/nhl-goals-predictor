@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
+import numpy as np
 import pandas as pd
 
 from .artifacts import ModelArtifact
@@ -23,6 +24,7 @@ from .conformal import split_conformal_interval
 from .config import config
 from .data import build_dataset, fetch_schedule_week
 from .features import add_features
+from .live import apply_live_residual_update, fetch_live_states
 from .logging_config import get_logger, setup_logging
 from .probabilistic import (
     discrete_quantile_from_pmf,
@@ -35,6 +37,10 @@ from .probabilistic import (
 )
 
 logger = get_logger(__name__)
+
+
+def _model_requires_xg(feature_names: List[str]) -> bool:
+    return any("xg" in name.lower() for name in feature_names)
 
 
 def fetch_upcoming_games(days_ahead: int = 7) -> pd.DataFrame:
@@ -113,6 +119,7 @@ def predict_games(
     # Load model artifact
     artifact = ModelArtifact.load(model_path)
     logger.info("Loaded model: %s", artifact.metadata.model_type)
+    include_xg = _model_requires_xg(artifact.metadata.feature_names)
 
     # For upcoming games, we need to compute features based on historical data
     # Mark upcoming games so they don't pollute rolling features
@@ -131,7 +138,7 @@ def predict_games(
     combined = combined.drop_duplicates(subset=["gamePk"], keep="first")
 
     # Add features (rolling stats will use historical data only due to NA scores)
-    combined = add_features(combined, include_goalies=False)
+    combined = add_features(combined, include_goalies=False, include_xg=include_xg)
 
     # Extract just the upcoming games with features
     upcoming_game_ids = set(upcoming_df["gamePk"])
@@ -195,6 +202,7 @@ def predict_games_probabilistic(
 
     artifact = ModelArtifact.load(model_path)
     expected_features = artifact.metadata.feature_names
+    include_xg = _model_requires_xg(expected_features)
 
     upcoming_df = upcoming_df.copy()
     upcoming_df["_is_upcoming"] = True
@@ -208,7 +216,7 @@ def predict_games_probabilistic(
 
     combined = pd.concat([historical_df, upcoming_df], ignore_index=True)
     combined = combined.drop_duplicates(subset=["gamePk"], keep="first")
-    combined = add_features(combined, include_goalies=False)
+    combined = add_features(combined, include_goalies=False, include_xg=include_xg)
 
     # Helper: build aligned feature matrix with simple imputation
     def build_X(frame: pd.DataFrame) -> pd.DataFrame:
@@ -264,7 +272,7 @@ def predict_games_probabilistic(
     else:
         pmf = poisson_mixture_pmf_matrix(mu_up, weight=float(mix_w), multiplier=float(mix_m), max_goals=max_goals)
 
-    results = up[["date", "homeTeam", "awayTeam"]].copy()
+    results = up[["gamePk", "date", "homeTeam", "awayTeam"]].copy()
     results["mu"] = mu_up.astype(float)
 
     for t in thresholds:
@@ -289,6 +297,94 @@ def predict_games_probabilistic(
         results["mix_multiplier"] = float(mix_m)
 
     return results
+
+
+def predict_games_live(
+    upcoming_df: pd.DataFrame,
+    model_path: Path,
+    historical_df: pd.DataFrame,
+    *,
+    thresholds: Optional[List[float]] = None,
+    max_goals: int = 20,
+) -> pd.DataFrame:
+    """Live-aware predictions with residual-goals updates for LIVE games."""
+    if thresholds is None:
+        thresholds = [6.5]
+
+    pre = predict_games_probabilistic(
+        upcoming_df,
+        model_path,
+        historical_df,
+        dist_model="nb2",
+        thresholds=thresholds,
+        max_goals=max_goals,
+    )
+    if pre.empty:
+        return pre
+
+    alpha = float(pre["nb2_alpha"].iloc[0]) if "nb2_alpha" in pre.columns else 0.1
+    state_by_game = fetch_live_states(pre["gamePk"].astype(int).tolist())
+
+    rows = []
+    for _, row in pre.iterrows():
+        game_pk = int(row["gamePk"])
+        state = state_by_game.get(
+            game_pk,
+            {
+                "gameState": "UNKNOWN",
+                "homeScore": 0,
+                "awayScore": 0,
+                "period": 1,
+                "clock": "",
+                "remaining_minutes": 60.0,
+            },
+        )
+
+        pre_pmf = np.asarray(row["pmf"], dtype=float)
+        live_pmf = pre_pmf.copy()
+        mu_live = float(row["mu"])
+        is_live_adjusted = False
+
+        game_state = str(state.get("gameState", "UNKNOWN")).upper()
+        if game_state == "LIVE":
+            updated = apply_live_residual_update(
+                mu_pregame=float(row["mu"]),
+                current_home_goals=int(state.get("homeScore", 0)),
+                current_away_goals=int(state.get("awayScore", 0)),
+                period=int(state.get("period", 1)),
+                clock=str(state.get("clock", "")),
+                game_state=game_state,
+                alpha_calibrated=alpha,
+                max_goals=max_goals,
+            )
+            live_pmf = np.asarray(updated["pmf"], dtype=float)
+            mu_live = float(updated["mu_live"])
+            is_live_adjusted = True
+
+        record = {
+            "gamePk": game_pk,
+            "date": row["date"],
+            "homeTeam": row["homeTeam"],
+            "awayTeam": row["awayTeam"],
+            "gameState": game_state,
+            "homeScore": int(state.get("homeScore", 0)),
+            "awayScore": int(state.get("awayScore", 0)),
+            "period": int(state.get("period", 1)),
+            "clock": str(state.get("clock", "")),
+            "remaining_minutes": float(state.get("remaining_minutes", 60.0)),
+            "pregame_mu": float(row["mu"]),
+            "live_mu": mu_live,
+            "is_live_adjusted": bool(is_live_adjusted),
+            "pi80_low": int(discrete_quantile_from_pmf(live_pmf[None, :], 0.10)[0]),
+            "pi80_high": int(discrete_quantile_from_pmf(live_pmf[None, :], 0.90)[0]),
+            "pmf": live_pmf.tolist(),
+        }
+        for t in thresholds:
+            record[f"pregame_p_over_{t:g}"] = float(prob_over_from_pmf(pre_pmf[None, :], threshold=t)[0])
+            record[f"live_p_over_{t:g}"] = float(prob_over_from_pmf(live_pmf[None, :], threshold=t)[0])
+        rows.append(record)
+
+    return pd.DataFrame(rows).sort_values(["date", "gamePk"]).reset_index(drop=True)
 
 
 def main(argv: Optional[List[str]] = None) -> None:

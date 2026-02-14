@@ -289,6 +289,46 @@ def _compute_multi_window_rolling(
     return team_log
 
 
+def _add_xg_rolling_features(
+    team_log: pd.DataFrame,
+    *,
+    seasons: Tuple[str, ...],
+    xg_windows: Tuple[int, ...],
+) -> pd.DataFrame:
+    """Join team-level xG rows and compute no-leakage rolling xG features."""
+    from .xg import build_xg_team_log
+
+    team_log = team_log.copy()
+    xg_log = build_xg_team_log(seasons, use_cache=True)
+    if xg_log.empty:
+        return team_log
+
+    xg_log = xg_log.copy()
+    xg_log["season"] = xg_log["season"].astype(str)
+    xg_log["date"] = pd.to_datetime(xg_log["date"]).dt.strftime("%Y-%m-%d")
+
+    team_log["season"] = team_log["season"].astype(str)
+    team_log["date"] = pd.to_datetime(team_log["date"]).dt.strftime("%Y-%m-%d")
+
+    team_log = team_log.merge(
+        xg_log,
+        on=["season", "date", "team", "opponent"],
+        how="left",
+    )
+
+    grouped = team_log.groupby("team")
+    for w in xg_windows:
+        suffix = f"_{w}g"
+        team_log[f"avg_xGF{suffix}"] = grouped["xGF"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+        team_log[f"avg_xGA{suffix}"] = grouped["xGA"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+
+    return team_log
+
+
 def _compute_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute interaction features capturing matchup dynamics.
 
@@ -347,6 +387,29 @@ def _compute_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
         df["home_goalie_vs_offense"] = df["home_goalie_sv_pct"] * df["away_avg_GF"]
         df["away_goalie_vs_offense"] = df["away_goalie_sv_pct"] * df["home_avg_GF"]
 
+    return df
+
+
+def _compute_xg_derived_features(df: pd.DataFrame, xg_windows: Tuple[int, ...]) -> pd.DataFrame:
+    """Add xG-vs-goals deltas and matchup interactions for each xG window."""
+    df = df.copy()
+    for w in xg_windows:
+        suffix = f"_{w}g"
+        home_xgf = f"home_avg_xGF{suffix}"
+        away_xgf = f"away_avg_xGF{suffix}"
+        home_xga = f"home_avg_xGA{suffix}"
+        away_xga = f"away_avg_xGA{suffix}"
+        home_gf = f"home_avg_GF{suffix}"
+        away_gf = f"away_avg_GF{suffix}"
+
+        if all(c in df.columns for c in [home_xgf, home_gf]):
+            df[f"home_xg_diff_{w}g"] = df[home_xgf] - df[home_gf]
+        if all(c in df.columns for c in [away_xgf, away_gf]):
+            df[f"away_xg_diff_{w}g"] = df[away_xgf] - df[away_gf]
+        if all(c in df.columns for c in [home_xgf, away_xga]):
+            df[f"xg_scoring_opp_{w}g"] = df[home_xgf] * df[away_xga]
+        if all(c in df.columns for c in [away_xgf, home_xga]):
+            df[f"xg_opp_threat_{w}g"] = df[away_xgf] * df[home_xga]
     return df
 
 
@@ -418,6 +481,7 @@ def add_features(
     window: int | None = None,
     min_games: int | None = None,
     include_goalies: bool | None = None,
+    include_xg: bool | None = None,
     include_multi_window: bool | None = None,
     include_interactions: bool | None = None,
     include_temporal: bool | None = None,
@@ -441,6 +505,9 @@ def add_features(
     include_goalies : bool, optional
         If True, add goalie features (requires goalie data to be fetched).
         Defaults to config value.
+    include_xg : bool, optional
+        If True, add MoneyPuck rolling xG features when available.
+        If unavailable, logs a warning and continues without xG columns.
     include_multi_window : bool, optional
         If True, compute rolling stats for multiple windows (5, 10, 20, 40 games).
         Defaults to config value.
@@ -463,6 +530,8 @@ def add_features(
         min_games = config.features.min_games
     if include_goalies is None:
         include_goalies = config.features.include_goalies
+    if include_xg is None:
+        include_xg = config.features.include_xg
     if include_multi_window is None:
         include_multi_window = config.features.include_multi_window
     if include_interactions is None:
@@ -489,6 +558,19 @@ def add_features(
         )
         logger.debug("Added multi-window features for windows: %s", config.features.rolling_windows)
 
+    # Add optional rolling xG features
+    if include_xg:
+        try:
+            seasons = tuple(sorted(df["season"].astype(str).unique()))
+            team_log = _add_xg_rolling_features(
+                team_log,
+                seasons=seasons,
+                xg_windows=config.features.xg_windows,
+            )
+            logger.debug("Added xG rolling features for windows: %s", config.features.xg_windows)
+        except Exception as e:
+            logger.warning("Could not add xG features; proceeding without xG columns: %s", e)
+
     # Base feature columns (from primary window)
     feature_cols = ["avg_GF", "avg_GA", "avg_total", "win_pct", "rest_days",
                     "is_back_to_back", "win_streak", "home_win_pct", "away_win_pct"]
@@ -503,7 +585,13 @@ def add_features(
                 f"win_pct{suffix}", f"std_GF{suffix}"
             ])
 
-    all_feature_cols = feature_cols + multi_window_cols
+    xg_cols = []
+    if include_xg:
+        for w in config.features.xg_windows:
+            suffix = f"_{w}g"
+            xg_cols.extend([f"avg_xGF{suffix}", f"avg_xGA{suffix}"])
+
+    all_feature_cols = feature_cols + multi_window_cols + xg_cols
 
     # Set features to NaN for teams without enough history
     mask = team_log["games_played"] < min_games
@@ -557,6 +645,9 @@ def add_features(
     if include_interactions:
         df_out = _compute_interaction_features(df_out)
         logger.debug("Added interaction features")
+
+    if include_xg:
+        df_out = _compute_xg_derived_features(df_out, config.features.xg_windows)
 
     # Sort by date
     df_out = df_out.sort_values("date").reset_index(drop=True)

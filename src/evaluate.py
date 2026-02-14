@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from .data import build_dataset
 from .evaluation import time_series_cv_forecast
@@ -61,6 +62,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--splits", type=int, default=5)
     parser.add_argument("--cal-fraction", type=float, default=0.2)
     parser.add_argument("--max-goals", type=int, default=20)
+    parser.add_argument("--include-xg", action="store_true", help="Include MoneyPuck xG features when available")
+    parser.add_argument("--diagnostics", action="store_true", help="Save fold-level diagnostics CSV")
     parser.add_argument("--outdir", type=Path, default=Path("reports"))
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
@@ -68,7 +71,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     setup_logging(level="DEBUG" if args.verbose else "INFO")
 
     df = build_dataset(args.seasons, use_cache=True)
-    df = add_features(df, include_goalies=False)
+    df = add_features(df, include_goalies=False, include_xg=args.include_xg)
 
     result = time_series_cv_forecast(
         df,
@@ -78,6 +81,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         n_splits=args.splits,
         cal_fraction=args.cal_fraction,
         max_goals=args.max_goals,
+        return_diagnostics=args.diagnostics,
     )
 
     metrics = result.metrics_mean
@@ -117,6 +121,11 @@ def main(argv: Optional[list[str]] = None) -> None:
         title="Randomized PIT (distribution calibration)",
         out_path=pit_path,
     )
+
+    if args.diagnostics and result.diagnostics is not None:
+        diag_path = outdir / f"diagnostics_{args.point_model}_{args.dist_model}.csv"
+        pd.DataFrame(result.diagnostics).to_csv(diag_path, index=False)
+        print(f"- {diag_path}")
 
     print(f"\nSaved:\n- {metrics_path}\n- {plot_path}\n- {pit_path}")
 

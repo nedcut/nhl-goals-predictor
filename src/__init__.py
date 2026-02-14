@@ -35,6 +35,12 @@ __all__ = [
     "nb2_pmf_matrix",
     "poisson_mixture_pmf_matrix",
     "prob_over_from_pmf",
+    # Championing
+    "weighted_score",
+    "rank_candidates",
+    "choose_champion",
+    # Portfolio orchestration
+    "run_portfolio_pipeline",
     # Baselines
     "TeamStrengthPoissonModel",
     "TeamStrengthConfig",
@@ -70,6 +76,10 @@ _LAZY_ATTR_MODULES = {
     "nb2_pmf_matrix": ".probabilistic",
     "poisson_mixture_pmf_matrix": ".probabilistic",
     "prob_over_from_pmf": ".probabilistic",
+    "weighted_score": ".champion",
+    "rank_candidates": ".champion",
+    "choose_champion": ".champion",
+    "run_portfolio_pipeline": ".portfolio",
     "TeamStrengthPoissonModel": ".team_strength",
     "TeamStrengthConfig": ".team_strength",
     "ModelArtifact": ".artifacts",

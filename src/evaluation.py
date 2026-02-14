@@ -11,7 +11,7 @@ Focus:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -77,6 +77,7 @@ class CVForecastResult:
     folds: list[FoldForecastMetrics]
     reliability_bins: list
     pit_values: list[float]
+    diagnostics: list[dict[str, Any]] | None = None
 
     @property
     def metrics_mean(self) -> dict[str, float]:
@@ -101,6 +102,7 @@ def _fit_point_model(
     *,
     point_model: PointModel,
     feature_cols: Optional[list[str]],
+    xgb_params: Optional[dict[str, Any]] = None,
 ) -> tuple[object, Optional[StandardScaler], list[str]]:
     if point_model == "team_strength":
         model = TeamStrengthPoissonModel().fit(df_fit)
@@ -135,6 +137,8 @@ def _fit_point_model(
             raise ImportError("point_model='xgb' requires xgboost") from e
 
         params = dict(config.model.xgb_params)
+        if xgb_params:
+            params.update(xgb_params)
         params.update({"random_state": config.model.random_state, "n_jobs": -1, "verbosity": 0})
         model = xgb.XGBRegressor(**params)
         model.fit(X, y)
@@ -173,8 +177,18 @@ def time_series_cv_forecast(
     max_goals: int = 20,
     feature_cols: Optional[list[str]] = None,
     random_state: int = 42,
+    return_diagnostics: bool = False,
+    xgb_params: Optional[dict[str, Any]] = None,
 ) -> CVForecastResult:
-    """Run expanding-window CV with an inner calibration split per fold."""
+    """Run expanding-window CV with an inner calibration split per fold.
+
+    Parameters
+    ----------
+    return_diagnostics : bool
+        If True, include row-level fold diagnostics in the result payload.
+    xgb_params : dict, optional
+        Per-run XGBoost parameter override for point_model="xgb".
+    """
     if not (0.05 <= cal_fraction <= 0.5):
         raise ValueError("cal_fraction must be in [0.05, 0.5]")
 
@@ -196,6 +210,16 @@ def time_series_cv_forecast(
     all_over_y: list[int] = []
     pit_values: list[float] = []
     folds: list[FoldForecastMetrics] = []
+    diagnostics_rows: list[dict[str, Any]] = []
+
+    def _rest_bucket(rest_diff: float) -> str:
+        if pd.isna(rest_diff):
+            return "unknown"
+        if rest_diff <= -2:
+            return "away_rest_advantage"
+        if rest_diff >= 2:
+            return "home_rest_advantage"
+        return "even_rest"
 
     for fold, (train_idx, test_idx) in enumerate(tscv.split(df), start=1):
         train_df = df.iloc[train_idx].copy()
@@ -211,6 +235,7 @@ def time_series_cv_forecast(
             fit_df,
             point_model=point_model,
             feature_cols=feature_cols,
+            xgb_params=xgb_params,
         )
 
         mu_cal = _predict_mu(
@@ -290,6 +315,38 @@ def time_series_cv_forecast(
             )
         )
 
+        if return_diagnostics:
+            p_over_65 = prob_over_from_pmf(pmf_test, threshold=6.5)
+            for i, (_, row) in enumerate(test_df.reset_index(drop=True).iterrows()):
+                y_true = float(y_test[i])
+                mu_pred = float(mu_test[i])
+                abs_err = abs(y_true - mu_pred)
+                diagnostics_rows.append(
+                    {
+                        "fold": fold,
+                        "date": str(row.get("date", "")),
+                        "season": str(row.get("season", "")),
+                        "homeTeam": str(row.get("homeTeam", "")),
+                        "awayTeam": str(row.get("awayTeam", "")),
+                        "y_true": y_true,
+                        "mu_pred": mu_pred,
+                        "p_over_6_5": float(p_over_65[i]),
+                        "abs_error": float(abs_err),
+                        "squared_error": float(abs_err**2),
+                        "home_is_back_to_back": int(row.get("home_is_back_to_back", 0) or 0),
+                        "away_is_back_to_back": int(row.get("away_is_back_to_back", 0) or 0),
+                        "is_back_to_back": int(
+                            int(row.get("home_is_back_to_back", 0) or 0)
+                            or int(row.get("away_is_back_to_back", 0) or 0)
+                        ),
+                        "month": int(pd.to_datetime(row.get("date")).month) if row.get("date") else -1,
+                        "rest_diff_bucket": _rest_bucket(
+                            float(row.get("home_rest_days", np.nan))
+                            - float(row.get("away_rest_days", np.nan))
+                        ),
+                    }
+                )
+
     bins = reliability_curve(np.asarray(all_over_p), np.asarray(all_over_y), n_bins=10)
 
     return CVForecastResult(
@@ -300,4 +357,5 @@ def time_series_cv_forecast(
         folds=folds,
         reliability_bins=bins,
         pit_values=pit_values,
+        diagnostics=diagnostics_rows if return_diagnostics else None,
     )

@@ -107,7 +107,7 @@ def get_feature_columns(df: pd.DataFrame) -> List[str]:
         "h2h_", "venue_",
         # Interaction features
         "scoring_", "opponent_", "rest_advantage", "form_diff", "combined_",
-        "opp_threat",
+        "opp_threat", "xg_", "home_xg_", "away_xg_",
         # Temporal features
         "month", "day_of_week", "is_weekend", "days_into_season",
         "season_progress", "is_late_season", "is_early_season",
@@ -602,11 +602,17 @@ def optimize_hyperparameters(
     n_cv_folds: int | None = None,
     timeout: int | None = None,
     show_progress: bool = True,
+    objective_metric: Literal["mae", "weighted_prob"] = "mae",
+    dist_model: Literal["nb2", "poisson", "poisson_mixture"] = "nb2",
+    threshold: float = 6.5,
+    tune_splits: int = 3,
 ) -> Dict[str, Any]:
     """Use Optuna to find optimal XGBoost hyperparameters.
 
-    Performs Bayesian optimization with time-series cross-validation
-    to find the best hyperparameters for XGBoost.
+    Supports:
+    - ``objective_metric="mae"``: classic MAE minimization with time-series CV.
+    - ``objective_metric="weighted_prob"``: weighted probabilistic objective
+      normalized to a team-strength baseline.
 
     Parameters
     ----------
@@ -620,6 +626,14 @@ def optimize_hyperparameters(
         Timeout in seconds. If provided, stops after this time.
     show_progress : bool
         If True, show progress bar during optimization.
+    objective_metric : {"mae", "weighted_prob"}
+        Optimization objective.
+    dist_model : {"nb2", "poisson", "poisson_mixture"}
+        Distribution used when objective_metric="weighted_prob".
+    threshold : float
+        Over/under threshold used for Brier component in weighted objective.
+    tune_splits : int
+        Number of CV splits used in weighted-probability tuning.
 
     Returns
     -------
@@ -646,10 +660,29 @@ def optimize_hyperparameters(
     if n_cv_folds is None:
         n_cv_folds = config.model.cv_folds
 
-    # Prepare data
-    X, y, _ = _prepare_clean_feature_frame(df)
+    logger.info(
+        "Starting hyperparameter optimization with %d trials (objective=%s)",
+        n_trials,
+        objective_metric,
+    )
 
-    logger.info("Starting hyperparameter optimization with %d trials", n_trials)
+    baseline_metrics: Dict[str, float] | None = None
+    if objective_metric == "weighted_prob":
+        from .evaluation import time_series_cv_forecast
+
+        baseline = time_series_cv_forecast(
+            df,
+            point_model="team_strength",
+            dist_model=dist_model,
+            threshold=threshold,
+            n_splits=tune_splits,
+            max_goals=20,
+        )
+        baseline_metrics = baseline.metrics_mean
+        logger.info("Weighted-probability baseline metrics: %s", baseline_metrics)
+    else:
+        # Prepare data only for MAE objective path.
+        X, y, _ = _prepare_clean_feature_frame(df)
 
     def objective(trial: optuna.Trial) -> float:
         """Optuna objective function."""
@@ -664,25 +697,52 @@ def optimize_hyperparameters(
             "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
         }
 
-        # Time-series cross-validation
-        tscv = TimeSeriesSplit(n_splits=n_cv_folds)
-        scores = []
+        if objective_metric == "mae":
+            # Time-series cross-validation MAE objective.
+            tscv = TimeSeriesSplit(n_splits=n_cv_folds)
+            scores = []
 
-        for train_idx, val_idx in tscv.split(X):
-            X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
-            y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+            for train_idx, val_idx in tscv.split(X):
+                X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+                y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-            model = xgb.XGBRegressor(
-                **params,
-                random_state=config.model.random_state,
-                n_jobs=-1,
-                verbosity=0,
-            )
-            model.fit(X_tr, y_tr)
-            pred = model.predict(X_val)
-            scores.append(mean_absolute_error(y_val, pred))
+                model = xgb.XGBRegressor(
+                    **params,
+                    random_state=config.model.random_state,
+                    n_jobs=-1,
+                    verbosity=0,
+                )
+                model.fit(X_tr, y_tr)
+                pred = model.predict(X_val)
+                scores.append(mean_absolute_error(y_val, pred))
 
-        return np.mean(scores)
+            return float(np.mean(scores))
+
+        from .evaluation import time_series_cv_forecast
+
+        result = time_series_cv_forecast(
+            df,
+            point_model="xgb",
+            dist_model=dist_model,
+            threshold=threshold,
+            n_splits=tune_splits,
+            xgb_params=params,
+            max_goals=20,
+        )
+        metrics = result.metrics_mean
+        base = baseline_metrics or metrics
+
+        def _safe_ratio(metric_name: str) -> float:
+            denom = max(float(base[metric_name]), 1e-9)
+            return float(metrics[metric_name]) / denom
+
+        weighted_score = (
+            0.35 * _safe_ratio("mae")
+            + 0.30 * _safe_ratio("crps")
+            + 0.20 * _safe_ratio("dist_nll")
+            + 0.15 * _safe_ratio("over_brier")
+        )
+        return float(weighted_score)
 
     # Configure Optuna logging
     if not show_progress:
@@ -703,7 +763,7 @@ def optimize_hyperparameters(
     )
 
     best_params = study.best_params
-    logger.info("Best MAE: %.4f", study.best_value)
+    logger.info("Best objective value: %.4f", study.best_value)
     logger.info("Best parameters: %s", best_params)
 
     return best_params

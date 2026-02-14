@@ -9,13 +9,15 @@ Instead of only predicting a point estimate, it can produce a full distribution 
 |--------|-------|
 | Source-of-truth protocol | Expanding-window time-series CV (5 folds) + NB2 distribution calibration |
 | Data window | Seasons 20222023, 20232024, 20242025 |
-| Champion model | `xgb_current` (default config) |
-| Champion MAE | **1.8760** |
-| Champion CRPS | **1.2976** |
-| Champion Brier (`P(total_goals > 6.5)`) | **0.2469** |
+| Champion model | `xgb_tuned` (weighted probabilistic objective) |
+| Champion MAE | **1.8688** |
+| Champion CRPS | **1.2937** |
+| Champion Brier (`P(total_goals > 6.5)`) | **0.2463** |
 
-The project uses this probabilistic CV protocol as the primary model-selection criterion.  
-`xgb_tuned` improved MAE by only `0.0004` but was slightly worse on CRPS/Brier/dist-NLL, so it was not promoted.
+The project uses weighted probabilistic CV protocol as the primary model-selection criterion.
+Current rankings and rationale are generated in `reports/champion_model_report.{json,md}`.
+
+Portfolio artifacts are generated under `reports/` and documented in [MODEL_CARD.md](MODEL_CARD.md).
 
 ## Features
 
@@ -63,6 +65,12 @@ Run tests:
 
 ```bash
 pytest -q
+```
+
+Run the full portfolio pipeline:
+
+```bash
+python -m src.portfolio --seasons 20222023 20232024 20242025 --tune-trials 150
 ```
 
 ## Prediction CLI
@@ -114,9 +122,20 @@ uvicorn src.api:app --reload
 **Endpoints:**
 - `GET /predict?days_ahead=7` - Get predictions for upcoming games
 - `GET /predict/probabilistic?days_ahead=7` - Distribution forecast + P(over/under)
+- `GET /predict/live?days_ahead=1` - Pregame + live-adjusted probabilities
 - `GET /dashboard` - Tonight’s slate (simple HTML table)
+- `GET /dashboard/live` - Auto-refreshing live slate (20s cadence)
 - `GET /model/info` - Get model metadata and performance metrics
 - `GET /health` - Health check
+
+## Live Dashboard
+
+The live dashboard uses NHL game state (score, period, clock) plus a residual-goals NB2 updater:
+
+- `remaining_frac = remaining_minutes / 60`
+- `pace_mult = 1 + 0.04 * abs(goal_diff)`
+- `mu_remaining = max(0.05, mu_pregame * remaining_frac * pace_mult)`
+- Remaining goals are modeled with NB2 and shifted by current goals.
 
 ## Explainability + Stability
 
@@ -198,14 +217,26 @@ for model in registry.list_models():
 ## Key Findings
 
 1. **Time-series probabilistic CV is the decision authority** - this avoids holdout-only selection bias.
-2. **Default XGBoost config remains champion** - tuning produced a tiny MAE gain (`~0.0004`) but worse probabilistic calibration metrics.
+2. **Championing is weighted and probabilistic** - MAE, CRPS, dist-NLL, and Brier are normalized to the team-strength baseline.
 3. **Team-strength baseline is competitive** - useful as a robust sanity check for overfitting.
 4. **Model gains are modest by nature** - NHL total-goals prediction is high-noise, so consistency and calibration matter as much as point error.
 
 ## XGBoost Params
 
 ```python
-# Champion (current production/default)
+# Current tuned champion (from weighted probabilistic objective)
+{
+    'max_depth': 4,
+    'learning_rate': 0.011896873680695898,
+    'n_estimators': 65,
+    'reg_alpha': 1.7530910973690677,
+    'reg_lambda': 2.6740596452335668,
+    'subsample': 0.8393574607886646,
+    'colsample_bytree': 0.5556469177410432,
+    'min_child_weight': 7,
+}
+
+# Previous stable config
 {
     'max_depth': 2,
     'learning_rate': 0.01,
@@ -215,18 +246,6 @@ for model in registry.list_models():
     'subsample': 0.7,
     'colsample_bytree': 0.7,
     'min_child_weight': 7,
-}
-
-# Tuned candidate (not promoted; weaker CRPS/Brier/dist-NLL)
-{
-    'max_depth': 5,
-    'learning_rate': 0.006926051418392556,
-    'n_estimators': 216,
-    'reg_alpha': 1.4384035226197116,
-    'reg_lambda': 2.642639721292811,
-    'subsample': 0.5143686093013831,
-    'colsample_bytree': 0.7414638228550687,
-    'min_child_weight': 3,
 }
 ```
 
