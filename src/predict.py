@@ -22,7 +22,7 @@ import pandas as pd
 from .artifacts import ModelArtifact
 from .conformal import split_conformal_interval
 from .config import config
-from .data import build_dataset, fetch_schedule_week
+from .data import build_dataset, fetch_schedule_week, recent_seasons
 from .features import add_features
 from .live import apply_live_residual_update, fetch_live_states
 from .logging_config import get_logger, setup_logging
@@ -43,6 +43,15 @@ def _model_requires_xg(feature_names: List[str]) -> bool:
     return any("xg" in name.lower() for name in feature_names)
 
 
+def _prepare_upcoming_rows(upcoming_df: pd.DataFrame) -> pd.DataFrame:
+    """Mark scheduled games and remove placeholder score values."""
+    upcoming = upcoming_df.copy()
+    upcoming["_is_upcoming"] = True
+    for col in ("homeScore", "awayScore", "totalGoals"):
+        upcoming[col] = pd.NA
+    return upcoming
+
+
 def fetch_upcoming_games(days_ahead: int = 7) -> pd.DataFrame:
     """Fetch upcoming scheduled games from the NHL API.
 
@@ -57,11 +66,11 @@ def fetch_upcoming_games(days_ahead: int = 7) -> pd.DataFrame:
         DataFrame with upcoming games (gamePk, date, homeTeam, awayTeam).
     """
     today = datetime.now().date()
+    end_date = today + timedelta(days=days_ahead)
     all_games = []
 
     # Fetch schedule for the coming weeks
-    current_date = datetime.now()
-    end_date = current_date + timedelta(days=days_ahead)
+    current_date = today
 
     while current_date <= end_date:
         date_str = current_date.strftime("%Y-%m-%d")
@@ -73,7 +82,7 @@ def fetch_upcoming_games(days_ahead: int = 7) -> pd.DataFrame:
                 game_state = game.get("gameState", "")
                 if game_state in ("FUT", "PRE", "LIVE"):
                     game_date = datetime.strptime(game["date"], "%Y-%m-%d").date()
-                    if game_date >= today:
+                    if today <= game_date <= end_date:
                         all_games.append(game)
         except Exception as e:
             logger.warning("Failed to fetch schedule for %s: %s", date_str, e)
@@ -123,12 +132,7 @@ def predict_games(
 
     # For upcoming games, we need to compute features based on historical data
     # Mark upcoming games so they don't pollute rolling features
-    upcoming_df = upcoming_df.copy()
-    upcoming_df["_is_upcoming"] = True
-    if "homeScore" not in upcoming_df.columns:
-        upcoming_df["homeScore"] = pd.NA
-        upcoming_df["awayScore"] = pd.NA
-        upcoming_df["totalGoals"] = pd.NA
+    upcoming_df = _prepare_upcoming_rows(upcoming_df)
 
     historical_df = historical_df.copy()
     historical_df["_is_upcoming"] = False
@@ -204,12 +208,7 @@ def predict_games_probabilistic(
     expected_features = artifact.metadata.feature_names
     include_xg = _model_requires_xg(expected_features)
 
-    upcoming_df = upcoming_df.copy()
-    upcoming_df["_is_upcoming"] = True
-    if "homeScore" not in upcoming_df.columns:
-        upcoming_df["homeScore"] = pd.NA
-        upcoming_df["awayScore"] = pd.NA
-        upcoming_df["totalGoals"] = pd.NA
+    upcoming_df = _prepare_upcoming_rows(upcoming_df)
 
     historical_df = historical_df.copy()
     historical_df["_is_upcoming"] = False
@@ -413,8 +412,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument(
         "--seasons",
         nargs="+",
-        default=["20232024", "20242025"],
-        help="Seasons to use for historical data",
+        default=recent_seasons(2),
+        help="Seasons to use for historical data (default: previous and active season)",
     )
     parser.add_argument(
         "--verbose",

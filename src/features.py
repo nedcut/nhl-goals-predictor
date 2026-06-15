@@ -46,6 +46,9 @@ def _build_team_game_log(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
+    for col in ("homeScore", "awayScore", "totalGoals"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # Home team perspective
     home = df[["gamePk", "season", "date", "homeTeam", "homeScore", "awayScore"]].copy()
@@ -63,8 +66,14 @@ def _build_team_game_log(df: pd.DataFrame) -> pd.DataFrame:
     team_log = pd.concat([home, away], ignore_index=True)
     team_log = team_log.sort_values(["team", "date"]).reset_index(drop=True)
 
-    # Add derived columns
-    team_log["win"] = (team_log["goals_for"] > team_log["goals_against"]).astype(int)
+    # Preserve unknown outcomes for future games. Treating them as losses would
+    # contaminate rolling win rate and streak features for later scheduled games.
+    completed = team_log["goals_for"].notna() & team_log["goals_against"].notna()
+    team_log["win"] = np.where(
+        completed,
+        (team_log["goals_for"] > team_log["goals_against"]).astype(float),
+        np.nan,
+    )
     team_log["total_goals"] = team_log["goals_for"] + team_log["goals_against"]
 
     return team_log
@@ -97,8 +106,11 @@ def _compute_rolling_features(team_log: pd.DataFrame, window: int = 5) -> pd.Dat
         lambda x: x.shift(1).rolling(window, min_periods=1).mean()
     )
 
-    # Games played this season
-    team_log["games_played"] = grouped.cumcount()
+    # Number of completed prior games. Future schedule rows must not increment
+    # this feature for other future games in the same prediction batch.
+    team_log["games_played"] = grouped["win"].transform(
+        lambda x: x.notna().shift(1, fill_value=False).cumsum()
+    )
 
     # Rest days (days since last game)
     team_log["prev_game_date"] = grouped["date"].shift(1)
@@ -113,7 +125,8 @@ def _compute_rolling_features(team_log: pd.DataFrame, window: int = 5) -> pd.Dat
         current_streak = 0
         for i, val in enumerate(shifted):
             if pd.isna(val):
-                current_streak = 0
+                # Unknown future outcomes do not erase the last known streak.
+                pass
             elif val == 1:
                 current_streak = max(1, current_streak + 1)
             else:
@@ -185,6 +198,7 @@ def _compute_h2h_features(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
     """
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
+    df["totalGoals"] = pd.to_numeric(df["totalGoals"], errors="coerce")
     df = df.sort_values("date").reset_index(drop=True)
 
     # Create a consistent matchup key (alphabetical order)
@@ -225,6 +239,7 @@ def _compute_venue_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     """
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
+    df["totalGoals"] = pd.to_numeric(df["totalGoals"], errors="coerce")
     df = df.sort_values("date").reset_index(drop=True)
 
     # Use homeTeam as proxy for venue (each team has one home arena)
@@ -482,6 +497,7 @@ def add_features(
     min_games: int | None = None,
     include_goalies: bool | None = None,
     include_xg: bool | None = None,
+    require_xg: bool = False,
     include_multi_window: bool | None = None,
     include_interactions: bool | None = None,
     include_temporal: bool | None = None,
@@ -508,6 +524,10 @@ def add_features(
     include_xg : bool, optional
         If True, add MoneyPuck rolling xG features when available.
         If unavailable, logs a warning and continues without xG columns.
+    require_xg : bool
+        If True, raise when xG was requested but no xG feature columns were
+        produced. Intended for evaluation pipelines that must not silently
+        label a no-xG run as a full xG model.
     include_multi_window : bool, optional
         If True, compute rolling stats for multiple windows (5, 10, 20, 40 games).
         Defaults to config value.
@@ -569,7 +589,13 @@ def add_features(
             )
             logger.debug("Added xG rolling features for windows: %s", config.features.xg_windows)
         except Exception as e:
+            if require_xg:
+                raise RuntimeError("xG features were required but could not be loaded") from e
             logger.warning("Could not add xG features; proceeding without xG columns: %s", e)
+
+        has_xg_features = any(c.startswith("avg_xGF_") for c in team_log.columns)
+        if require_xg and not has_xg_features:
+            raise RuntimeError("xG features were required but no xG rows matched the game data")
 
     # Base feature columns (from primary window)
     feature_cols = ["avg_GF", "avg_GA", "avg_total", "win_pct", "rest_days",
@@ -651,6 +677,14 @@ def add_features(
 
     # Sort by date
     df_out = df_out.sort_values("date").reset_index(drop=True)
+
+    # Stamp the engineered feature columns onto the frame so downstream callers
+    # can read the authoritative list instead of re-deriving it from fragile
+    # name prefixes. df.attrs survives most pandas ops; callers fall back to
+    # prefix detection when it does not.
+    from .model import FEATURE_COLUMNS_ATTR, get_feature_columns
+
+    df_out.attrs[FEATURE_COLUMNS_ATTR] = get_feature_columns(df_out, _use_registry=False)
 
     return df_out
 

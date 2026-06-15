@@ -48,7 +48,7 @@ From the distribution you get:
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Install dependencies (NumPy is pinned <2 for binary compatibility)
+# Install dependencies
 pip install -r requirements.txt
 
 # Run the notebook
@@ -85,7 +85,7 @@ python -m src.predict --model models/xgboost_v1 --days 7
 python -m src.predict --output predictions.csv
 
 # Specify historical data seasons
-python -m src.predict --seasons 20232024 20242025
+python -m src.predict --seasons 20242025 20252026
 ```
 
 Probabilistic forecasts (over/under probabilities + intervals):
@@ -127,6 +127,10 @@ uvicorn src.api:app --reload
 - `GET /dashboard/live` - Auto-refreshing live slate (20s cadence)
 - `GET /model/info` - Get model metadata and performance metrics
 - `GET /health` - Health check
+
+By default, inference loads the previous and active NHL seasons and refreshes
+the active-season cache every six hours. Override runtime paths with
+`NHL_MODEL_PATH` and `NHL_HISTORICAL_SEASONS` (comma-separated).
 
 ## Live Dashboard
 

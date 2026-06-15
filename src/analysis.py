@@ -22,16 +22,61 @@ def run_ablation_study(
     dist_model: str = "nb2",
     threshold: float = 6.5,
     n_splits: int = 5,
+    include_xg: bool = True,
 ) -> dict[str, Any]:
-    """Run fixed ablation scenarios and return metrics by scenario."""
+    """Run fixed ablation scenarios and return metrics by scenario.
+
+    When ``include_xg`` is False (e.g. the MoneyPuck feed is unavailable) the
+    xG-requiring scenarios are run without xG so the study still completes; the
+    xG dimension simply collapses rather than aborting the whole pipeline.
+    """
     scenarios = [
-        ("full_model", dict(include_xg=True, include_goalies=True, include_interactions=True)),
+        (
+            "full_model",
+            dict(
+                include_xg=True,
+                require_xg=True,
+                include_goalies=True,
+                include_interactions=True,
+            ),
+        ),
         ("no_xg", dict(include_xg=False, include_goalies=True, include_interactions=True)),
-        ("no_goalie_features", dict(include_xg=True, include_goalies=False, include_interactions=True)),
-        ("no_interactions", dict(include_xg=True, include_goalies=True, include_interactions=False)),
-        ("no_h2h_venue", dict(include_xg=True, include_goalies=True, include_interactions=True)),
+        (
+            "no_goalie_features",
+            dict(
+                include_xg=True,
+                require_xg=True,
+                include_goalies=False,
+                include_interactions=True,
+            ),
+        ),
+        (
+            "no_interactions",
+            dict(
+                include_xg=True,
+                require_xg=True,
+                include_goalies=True,
+                include_interactions=False,
+            ),
+        ),
+        (
+            "no_h2h_venue",
+            dict(
+                include_xg=True,
+                require_xg=True,
+                include_goalies=True,
+                include_interactions=True,
+            ),
+        ),
         ("team_strength", None),
     ]
+
+    if not include_xg:
+        # Neutralize xG requirements so the study runs on remaining families.
+        for _name, kwargs in scenarios:
+            if kwargs is not None:
+                kwargs["include_xg"] = False
+                kwargs.pop("require_xg", None)
 
     results: Dict[str, Dict[str, float]] = {}
     for name, feature_kwargs in scenarios:

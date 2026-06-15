@@ -38,6 +38,7 @@ class DataConfig:
     goalie_cache_dir: Path = field(default_factory=lambda: Path("data/goalies"))
     goalie_cache_file: str = "goalie_stats.csv"
     xg_cache_dir: Path = field(default_factory=lambda: Path("data/xg"))
+    active_season_cache_ttl_hours: int = 6
     xg_url_template: str = (
         "https://moneypuck.com/moneypuck/playerData/games/{season}/regular/teams.csv"
     )

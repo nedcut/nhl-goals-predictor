@@ -337,6 +337,71 @@ class TestFeatureEngineering:
 
         assert "venue_avg_goals" in result.columns
 
+    def test_future_games_do_not_change_outcome_history(self):
+        """Unknown scheduled results must not look like 0-0 losses."""
+        from src.features import add_features
+
+        games = pd.DataFrame(
+            [
+                {
+                    "gamePk": 1,
+                    "season": "20252026",
+                    "date": "2025-10-01",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team B",
+                    "homeScore": 3,
+                    "awayScore": 2,
+                    "totalGoals": 5,
+                },
+                {
+                    "gamePk": 2,
+                    "season": "20252026",
+                    "date": "2025-10-03",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team C",
+                    "homeScore": 4,
+                    "awayScore": 1,
+                    "totalGoals": 5,
+                },
+                {
+                    "gamePk": 3,
+                    "season": "20252026",
+                    "date": "2025-10-05",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team D",
+                    "homeScore": pd.NA,
+                    "awayScore": pd.NA,
+                    "totalGoals": pd.NA,
+                },
+                {
+                    "gamePk": 4,
+                    "season": "20252026",
+                    "date": "2025-10-07",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team E",
+                    "homeScore": pd.NA,
+                    "awayScore": pd.NA,
+                    "totalGoals": pd.NA,
+                },
+            ]
+        )
+
+        result = add_features(
+            games,
+            window=5,
+            min_games=1,
+            include_goalies=False,
+            include_multi_window=False,
+            include_interactions=False,
+            include_temporal=False,
+        )
+        later = result.loc[result["gamePk"] == 4].iloc[0]
+
+        assert later["home_avg_GF"] == pytest.approx(3.5)
+        assert later["home_win_pct"] == pytest.approx(1.0)
+        assert later["home_win_streak"] == 2
+        assert later["home_games_played"] == 2
+
 
 # =============================================================================
 # MODEL TRAINING TESTS
@@ -663,6 +728,34 @@ class TestDataModule:
                 mock_fetch.assert_not_called()
                 assert len(result) == len(sample_game_data)
 
+    def test_recent_seasons_roll_forward_from_calendar_date(self):
+        """Runtime defaults should include the active NHL season."""
+        from src.data import recent_seasons, season_for_date
+
+        as_of = datetime(2026, 6, 15)
+        assert season_for_date(as_of) == "20252026"
+        assert recent_seasons(2, as_of) == ["20242025", "20252026"]
+
+    def test_active_season_cache_freshness(self, sample_game_data, temp_cache_dir):
+        """Active-season data should age out instead of staying frozen forever."""
+        from src.data import _active_season_cache_is_fresh, get_cache_path, save_season_cache
+
+        season = "20252026"
+        save_season_cache(sample_game_data, season, temp_cache_dir)
+        cache_path = get_cache_path(season, temp_cache_dir)
+        written_at = datetime.fromtimestamp(cache_path.stat().st_mtime)
+
+        assert _active_season_cache_is_fresh(
+            season,
+            temp_cache_dir,
+            now=written_at + timedelta(hours=1),
+        )
+        assert not _active_season_cache_is_fresh(
+            season,
+            temp_cache_dir,
+            now=written_at + timedelta(hours=7),
+        )
+
 
 # =============================================================================
 # PREDICTION MODULE TESTS
@@ -723,6 +816,46 @@ class TestPredictionModule:
         # Predictions should be reasonable (between 0 and 15 goals)
         assert all(predictions["predicted_total_goals"] >= 0)
         assert all(predictions["predicted_total_goals"] <= 20)
+
+    def test_prepare_upcoming_rows_removes_placeholder_scores(self):
+        """The NHL API's future 0-0 placeholders are not completed results."""
+        from src.predict import _prepare_upcoming_rows
+
+        upcoming = pd.DataFrame(
+            [
+                {
+                    "gamePk": 1,
+                    "homeScore": 0,
+                    "awayScore": 0,
+                    "totalGoals": 0,
+                }
+            ]
+        )
+        prepared = _prepare_upcoming_rows(upcoming)
+
+        assert prepared["_is_upcoming"].all()
+        assert prepared[["homeScore", "awayScore", "totalGoals"]].isna().all().all()
+
+    def test_fetch_upcoming_games_respects_requested_end_date(self):
+        """Schedule weeks can include games beyond the requested horizon."""
+        from src import predict
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 6, 15)
+
+        games = [
+            {"gamePk": 1, "date": "2026-06-15", "gameState": "FUT"},
+            {"gamePk": 2, "date": "2026-06-17", "gameState": "FUT"},
+            {"gamePk": 3, "date": "2026-06-18", "gameState": "FUT"},
+        ]
+
+        with patch("src.predict.datetime", FixedDateTime):
+            with patch("src.predict.fetch_schedule_week", return_value=games):
+                result = predict.fetch_upcoming_games(days_ahead=2)
+
+        assert result["gamePk"].tolist() == [1, 2]
 
 
 # =============================================================================

@@ -11,6 +11,9 @@ Usage:
 
 from __future__ import annotations
 
+import math
+import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -34,9 +37,14 @@ except ImportError:
 import pandas as pd
 
 from .artifacts import ModelArtifact
-from .data import build_dataset
+from .data import build_dataset, recent_seasons
 from .features import add_features
-from .predict import fetch_upcoming_games, predict_games, predict_games_live
+from .predict import (
+    _prepare_upcoming_rows,
+    fetch_upcoming_games,
+    predict_games,
+    predict_games_live,
+)
 from .probabilistic import (
     discrete_quantile_from_pmf,
     fit_nb2_alpha,
@@ -74,10 +82,10 @@ class ModelInfo(BaseModel):
 
     model_type: str
     training_date: str
-    mae: float
-    rmse: float
-    baseline_mae: float
-    improvement_pct: float
+    mae: Optional[float]
+    rmse: Optional[float]
+    baseline_mae: Optional[float]
+    improvement_pct: Optional[float]
     n_training_samples: int
     n_test_samples: int
     n_features: int
@@ -155,21 +163,22 @@ _historical_df: Optional[pd.DataFrame] = None
 _prob_calibration: Optional[Dict[str, float]] = None
 
 # Default configuration
-DEFAULT_MODEL_PATH = Path("models/xgboost_v1")
-DEFAULT_SEASONS = ["20232024", "20242025"]
+DEFAULT_MODEL_PATH = Path(os.getenv("NHL_MODEL_PATH", "models/xgboost_v1"))
+DEFAULT_SEASONS = [
+    season.strip()
+    for season in os.getenv("NHL_HISTORICAL_SEASONS", ",".join(recent_seasons(2))).split(",")
+    if season.strip()
+]
 
 
-# Create FastAPI app
-app = FastAPI(
-    title="NHL Goals Predictor API",
-    description="Predict total goals for upcoming NHL games using machine learning",
-    version="1.0.0",
-)
+def _finite_or_none(value: float) -> Optional[float]:
+    """Return JSON-safe model metrics for legacy artifacts."""
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Load model and historical data on startup."""
+def _load_startup_state() -> None:
+    """Load model and historical data into module globals (called at startup)."""
     global _artifact, _historical_df, _prob_calibration
 
     # Load model
@@ -228,13 +237,30 @@ async def startup_event():
             _prob_calibration = None
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern FastAPI startup/shutdown hook (replaces deprecated on_event)."""
+    _load_startup_state()
+    yield
+
+
+# Create FastAPI app
+app = FastAPI(
+    title="NHL Goals Predictor API",
+    description="Predict total goals for upcoming NHL games using machine learning",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Check API health and readiness."""
+    historical_loaded = _historical_df is not None and not _historical_df.empty
     return HealthResponse(
-        status="healthy" if _artifact is not None else "degraded",
+        status="healthy" if _artifact is not None and historical_loaded else "degraded",
         model_loaded=_artifact is not None,
-        historical_data_loaded=_historical_df is not None and not _historical_df.empty,
+        historical_data_loaded=historical_loaded,
     )
 
 
@@ -332,11 +358,7 @@ async def get_probabilistic_predictions(
         )
 
     # Compute features for upcoming games using historical context
-    upcoming = upcoming.copy()
-    upcoming["_is_upcoming"] = True
-    upcoming["homeScore"] = pd.NA
-    upcoming["awayScore"] = pd.NA
-    upcoming["totalGoals"] = pd.NA
+    upcoming = _prepare_upcoming_rows(upcoming)
 
     hist = _historical_df.copy()
     hist["_is_upcoming"] = False
@@ -586,10 +608,10 @@ async def get_model_info():
     return ModelInfo(
         model_type=meta.model_type,
         training_date=meta.training_date,
-        mae=meta.mae,
-        rmse=meta.rmse,
-        baseline_mae=meta.baseline_mae,
-        improvement_pct=meta.improvement_pct,
+        mae=_finite_or_none(meta.mae),
+        rmse=_finite_or_none(meta.rmse),
+        baseline_mae=_finite_or_none(meta.baseline_mae),
+        improvement_pct=_finite_or_none(meta.improvement_pct),
         n_training_samples=meta.n_training_samples,
         n_test_samples=meta.n_test_samples,
         n_features=len(meta.feature_names),

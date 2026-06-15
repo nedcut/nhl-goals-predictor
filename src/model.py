@@ -86,39 +86,86 @@ class CVResult:
         self.rmse_std = np.std(self.rmse_scores)
 
 
-def get_feature_columns(df: pd.DataFrame) -> List[str]:
-    """Auto-detect feature columns from the DataFrame.
+# DataFrame.attrs key under which add_features stamps the authoritative list of
+# engineered feature columns.
+FEATURE_COLUMNS_ATTR = "feature_columns"
 
-    Looks for columns matching the pattern from add_features():
-    home_* and away_* columns that are numeric features.
+# Feature columns detected by prefix. These are specific enough that a stray
+# real-world column is unlikely to collide with them.
+_FEATURE_PREFIXES = (
+    # Basic rolling features
+    "home_avg_", "away_avg_", "home_win_", "away_win_",
+    "home_rest_", "away_rest_", "home_is_", "away_is_",
+    "home_games_", "away_games_",
+    # Multi-window features (e.g., home_avg_GF_5g, home_std_GF_10g)
+    "home_std_", "away_std_",
+    # Goalie features (numeric only)
+    "home_goalie_sv_", "away_goalie_sv_",
+    "home_goalie_gaa", "away_goalie_gaa",
+    "home_goalie_vs_", "away_goalie_vs_",
+    # Head-to-head and venue features
+    "h2h_", "venue_",
+    # Interaction features
+    "scoring_", "opponent_", "rest_advantage", "form_diff", "combined_",
+    "opp_threat", "xg_", "home_xg_", "away_xg_",
+    # Legacy column names for backwards compatibility
+    "homeTeam_avg_", "awayTeam_avg_",
+)
+
+# Temporal features matched by EXACT name. Using exact names (rather than a
+# "month" prefix that would also swallow e.g. "monthly_attendance") prevents an
+# unrelated future column from being silently treated as a model input.
+_TEMPORAL_FEATURE_NAMES = frozenset({
+    "month", "day_of_week", "is_weekend", "days_into_season",
+    "season_progress", "is_late_season", "is_early_season",
+})
+
+# Columns that must NEVER be treated as features even if they match a prefix.
+# These are the target, raw outcomes, and identity columns — including them
+# would leak the label or add useless identifiers.
+_NON_FEATURE_COLUMNS = frozenset({
+    "totalGoals", "homeScore", "awayScore", "home_goals", "away_goals",
+    "goals_for", "goals_against", "gamePk", "season", "date",
+    "homeTeam", "awayTeam", "team", "opponent",
+})
+
+
+def get_feature_columns(df: pd.DataFrame, *, _use_registry: bool = True) -> List[str]:
+    """Resolve the model's feature columns for a DataFrame.
+
+    Resolution order:
+    1. If ``add_features`` stamped an authoritative list in ``df.attrs`` and it
+       still matches the frame, use it (intersected with present columns).
+    2. Otherwise fall back to name-based detection: specific prefixes plus an
+       exact-match temporal allow-list, always excluding target/identity columns
+       and any non-numeric column.
+
+    Parameters
+    ----------
+    _use_registry : bool
+        Internal flag. ``add_features`` calls with ``False`` to build the
+        registry from raw detection (avoiding a chicken-and-egg dependency).
     """
-    feature_prefixes = (
-        # Basic rolling features
-        "home_avg_", "away_avg_", "home_win_", "away_win_",
-        "home_rest_", "away_rest_", "home_is_", "away_is_",
-        "home_games_", "away_games_",
-        # Multi-window features (e.g., home_avg_GF_5g, home_std_GF_10g)
-        "home_std_", "away_std_",
-        # Goalie features (numeric only)
-        "home_goalie_sv_", "away_goalie_sv_",
-        "home_goalie_gaa", "away_goalie_gaa",
-        "home_goalie_vs_", "away_goalie_vs_",
-        # Head-to-head and venue features
-        "h2h_", "venue_",
-        # Interaction features
-        "scoring_", "opponent_", "rest_advantage", "form_diff", "combined_",
-        "opp_threat", "xg_", "home_xg_", "away_xg_",
-        # Temporal features
-        "month", "day_of_week", "is_weekend", "days_into_season",
-        "season_progress", "is_late_season", "is_early_season",
-    )
-    # Also include legacy column names for backwards compatibility
-    legacy_prefixes = ("homeTeam_avg_", "awayTeam_avg_")
+    if _use_registry:
+        registered = df.attrs.get(FEATURE_COLUMNS_ATTR)
+        if registered:
+            present = [c for c in registered if c in df.columns]
+            if present:
+                return present
 
-    feature_cols = []
+    feature_cols: List[str] = []
     for col in df.columns:
-        if any(col.startswith(prefix) for prefix in feature_prefixes + legacy_prefixes):
-            feature_cols.append(col)
+        if col in _NON_FEATURE_COLUMNS:
+            continue
+        is_feature = col in _TEMPORAL_FEATURE_NAMES or any(
+            col.startswith(p) for p in _FEATURE_PREFIXES
+        )
+        if not is_feature:
+            continue
+        # Guard against non-numeric columns sneaking in via a prefix match.
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        feature_cols.append(col)
 
     return feature_cols
 
@@ -298,11 +345,12 @@ def train_random_forest(
 def train_xgboost(
     df: pd.DataFrame,
     *,
-    test_size: float = 0.2,
-    n_estimators: int = 200,
-    max_depth: int = 6,
-    learning_rate: float = 0.1,
-    random_state: int = 42,
+    test_size: float | None = None,
+    n_estimators: int | None = None,
+    max_depth: int | None = None,
+    learning_rate: float | None = None,
+    random_state: int | None = None,
+    xgb_params: Optional[Dict[str, Any]] = None,
 ) -> TrainingResult:
     """Train an XGBoost regressor.
 
@@ -312,14 +360,12 @@ def train_xgboost(
         DataFrame with features and target.
     test_size : float
         Fraction of data for testing.
-    n_estimators : int
-        Number of boosting rounds.
-    max_depth : int
-        Maximum tree depth.
-    learning_rate : float
-        Boosting learning rate.
-    random_state : int
-        Random seed.
+    n_estimators, max_depth, learning_rate : optional
+        Overrides for the tuned values in ``config.model.xgb_params``.
+    random_state : int, optional
+        Random seed. Defaults to the configured seed.
+    xgb_params : dict, optional
+        Additional XGBoost parameter overrides.
 
     Returns
     -------
@@ -331,14 +377,26 @@ def train_xgboost(
     X_train, X_test, y_train, y_test, feature_names = prepare_data(df, test_size)
     print(f"Training XGBoost on {len(X_train)} games, testing on {len(X_test)} games")
 
-    model = xgb.XGBRegressor(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        learning_rate=learning_rate,
-        random_state=random_state,
-        n_jobs=-1,
-        verbosity=0,
+    params: Dict[str, Any] = dict(config.model.xgb_params)
+    if xgb_params:
+        params.update(xgb_params)
+    if n_estimators is not None:
+        params["n_estimators"] = n_estimators
+    if max_depth is not None:
+        params["max_depth"] = max_depth
+    if learning_rate is not None:
+        params["learning_rate"] = learning_rate
+    params.update(
+        {
+            "random_state": (
+                config.model.random_state if random_state is None else random_state
+            ),
+            "n_jobs": -1,
+            "verbosity": 0,
+        }
     )
+
+    model = xgb.XGBRegressor(**params)
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
@@ -564,14 +622,11 @@ def cross_validate(
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
         if model_type == "xgb":
-            model = xgb.XGBRegressor(
-                n_estimators=model_kwargs.get("n_estimators", 200),
-                max_depth=model_kwargs.get("max_depth", 6),
-                learning_rate=model_kwargs.get("learning_rate", 0.1),
-                random_state=model_kwargs.get("random_state", 42),
-                n_jobs=-1,
-                verbosity=0,
-            )
+            params: Dict[str, Any] = dict(config.model.xgb_params)
+            params.update(model_kwargs)
+            params.setdefault("random_state", config.model.random_state)
+            params.update({"n_jobs": -1, "verbosity": 0})
+            model = xgb.XGBRegressor(**params)
         else:
             model = RandomForestRegressor(
                 n_estimators=model_kwargs.get("n_estimators", 200),

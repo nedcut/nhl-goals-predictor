@@ -1,4 +1,4 @@
 # Optional dependencies (not required for core pipeline)
 
 # Explainability
-shap>=0.44,<0.47
+shap>=0.44,<1.0

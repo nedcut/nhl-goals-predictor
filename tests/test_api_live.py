@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -125,3 +126,44 @@ def test_dashboard_live_html(monkeypatch):
     html = asyncio.run(api.live_dashboard())
     assert "Auto-refresh: 20s" in html.body.decode("utf-8")
     assert "Live P(&gt;6.5)" in html.body.decode("utf-8")
+
+
+def test_model_info_serializes_legacy_nan_metrics(monkeypatch):
+    """Legacy artifacts should report unknown metrics instead of crashing JSON."""
+
+    @dataclass
+    class LegacyMeta:
+        model_type: str = "XGBRegressor"
+        training_date: str = "unknown"
+        mae: float = math.nan
+        rmse: float = math.nan
+        baseline_mae: float = math.nan
+        improvement_pct: float = math.nan
+        n_training_samples: int = 0
+        n_test_samples: int = 0
+        feature_names: list[str] = field(default_factory=lambda: ["home_avg_GF"])
+        data_seasons: list[str] = field(default_factory=list)
+        git_commit: str | None = None
+
+    @dataclass
+    class LegacyArtifact:
+        metadata: LegacyMeta = field(default_factory=LegacyMeta)
+
+    monkeypatch.setattr(api, "_artifact", LegacyArtifact())
+    info = asyncio.run(api.get_model_info())
+
+    assert info.mae is None
+    assert info.rmse is None
+    assert info.baseline_mae is None
+    assert info.improvement_pct is None
+
+
+def test_health_requires_model_and_historical_data(monkeypatch):
+    monkeypatch.setattr(api, "_artifact", _DummyArtifact())
+    monkeypatch.setattr(api, "_historical_df", None)
+
+    health = asyncio.run(api.health_check())
+
+    assert health.status == "degraded"
+    assert health.model_loaded is True
+    assert health.historical_data_loaded is False
