@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-NHL Total Goals Predictor - a machine learning pipeline that predicts total goals in NHL games using XGBoost. The model uses rolling team statistics, goaltender performance metrics, and head-to-head history to beat the naive baseline (predicting historical mean).
+NHL Total Goals Predictor - a machine learning pipeline that produces **probabilistic** forecasts of total goals in NHL games. It turns point predictions into full goal-total distributions (Poisson / NB2 / Poisson-mixture), evaluates with proper scoring rules, and selects a champion model under a weighted probabilistic objective. The XGBoost model uses rolling team statistics, goaltender metrics, xG, and head-to-head history; the `team_strength` Poisson regression is the normalization baseline.
 
-**Current Performance:** Test MAE 1.882 vs Baseline MAE 1.894 (+0.6% improvement)
+**Current Performance (expanding-window time-series CV, 5 folds, NB2 calibration):** Champion `xgb_tuned` — MAE ≈ 1.869, CRPS ≈ 1.294, Brier(>6.5) ≈ 0.246, vs `team_strength` baseline MAE ≈ 1.886. Numbers are regenerated into `reports/champion_model_report.{json,md}` and `MODEL_CARD.md`.
+
+**Model selection is significance-aware:** the champion's margin over the runner-up is tested with a paired bootstrap over per-game scores (`src/significance.py`). Margins this small are frequently *within noise* — trust the bootstrap verdict, not the raw weighted-score ordering, before claiming one model beats another.
 
 ## Commands
 
@@ -68,7 +70,12 @@ save_model(result, 'models/xgboost_v1', seasons=['20232024', '20242025'])
 | `data.py` | NHL API data fetching with per-season caching |
 | `features.py` | Rolling team stats, H2H history, venue trends |
 | `goalies.py` | Goalie data fetching and rolling save%/GAA |
-| `model.py` | Training, CV, Optuna optimization |
+| `model.py` | Training, CV, Optuna optimization; `get_feature_columns` registry |
+| `probabilistic.py` | Goal-total distributions, CRPS/NLL, PIT, reliability |
+| `evaluation.py` | Time-series CV forecast + per-game scores + fold std |
+| `significance.py` | Paired-bootstrap model comparison (champion vs runner-up) |
+| `champion.py` | Weighted-objective ranking + significance-annotated reports |
+| `portfolio.py` | End-to-end orchestrator (CV → champion → model card) |
 | `artifacts.py` | Model + metadata persistence |
 | `registry.py` | Model versioning and promotion |
 | `predict.py` | CLI for predictions |

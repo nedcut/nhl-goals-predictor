@@ -39,6 +39,11 @@ __all__ = [
     "weighted_score",
     "rank_candidates",
     "choose_champion",
+    "per_game_weighted_scores",
+    "compare_models_significance",
+    # Significance
+    "paired_bootstrap",
+    "PairedComparison",
     # Portfolio orchestration
     "run_portfolio_pipeline",
     # Baselines
@@ -79,6 +84,10 @@ _LAZY_ATTR_MODULES = {
     "weighted_score": ".champion",
     "rank_candidates": ".champion",
     "choose_champion": ".champion",
+    "per_game_weighted_scores": ".champion",
+    "compare_models_significance": ".champion",
+    "paired_bootstrap": ".significance",
+    "PairedComparison": ".significance",
     "run_portfolio_pipeline": ".portfolio",
     "TeamStrengthPoissonModel": ".team_strength",
     "TeamStrengthConfig": ".team_strength",

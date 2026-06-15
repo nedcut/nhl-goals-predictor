@@ -22,7 +22,8 @@
 - `score = 0.35*(mae/base_mae) + 0.30*(crps/base_crps) + 0.20*(dist_nll/base_dist_nll) + 0.15*(over_brier/base_brier)`
 - Baseline model for normalization: `team_strength`.
 - Current champion: `xgb_tuned`.
-- Rationale: Lowest weighted score (0.9945) vs xgb_current (0.9951); tie-breakers MAE then CRPS.
+- Rationale: Lowest weighted score (0.9967) vs xgb_current (0.9978); tie-breakers MAE then CRPS.
+- Champion margin over runner-up is within noise (95% CI [-0.0024, +0.0001], p=0.081); treat the two models as statistically indistinguishable.
 
 ## Known Failure Modes
 - Sparse recent form early season.

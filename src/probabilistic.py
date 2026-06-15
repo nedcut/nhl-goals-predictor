@@ -20,6 +20,16 @@ import numpy as np
 
 DistributionKind = Literal["poisson", "nb2", "poisson_mixture"]
 
+# Vectorized lgamma created once at import. np.vectorize rebuilds its wrapper on
+# every call; np.frompyfunc builds the ufunc a single time, so reusing this is
+# both faster and clearer than scattering np.vectorize(lgamma) through the module.
+_lgamma = np.frompyfunc(lgamma, 1, 1)
+
+
+def _lgamma_arr(x: np.ndarray) -> np.ndarray:
+    """Vectorized lgamma returning a float64 array (frompyfunc yields object)."""
+    return _lgamma(x).astype(float)
+
 
 def _as_1d(x: np.ndarray | Iterable[float]) -> np.ndarray:
     arr = np.asarray(x, dtype=float)
@@ -37,7 +47,7 @@ def poisson_logpmf(k: np.ndarray, mu: np.ndarray) -> np.ndarray:
     """Poisson log PMF for integer k and mean mu (vectorized)."""
     k = np.asarray(k, dtype=float)
     mu = _clip_mu(mu)
-    return k * np.log(mu) - mu - np.vectorize(lgamma)(k + 1.0)
+    return k * np.log(mu) - mu - _lgamma_arr(k + 1.0)
 
 
 def nb2_logpmf(k: np.ndarray, mu: np.ndarray, alpha: float) -> np.ndarray:
@@ -58,11 +68,10 @@ def nb2_logpmf(k: np.ndarray, mu: np.ndarray, alpha: float) -> np.ndarray:
     r = 1.0 / alpha
     p = r / (r + mu)  # success probability in NB(r, p)
     # log pmf = lgamma(k+r) - lgamma(r) - lgamma(k+1) + r log p + k log(1-p)
-    lg = np.vectorize(lgamma)
     return (
-        lg(k + r)
-        - lg(r)
-        - lg(k + 1.0)
+        _lgamma_arr(k + r)
+        - lgamma(r)
+        - _lgamma_arr(k + 1.0)
         + r * np.log(p)
         + k * np.log1p(-p)
     )
@@ -232,8 +241,13 @@ def fit_poisson_mixture(
     return best_w, best_m
 
 
-def crps_from_pmf(pmf: np.ndarray, y: np.ndarray | Iterable[int]) -> float:
-    """Mean CRPS for a discrete distribution over {0..K}."""
+def crps_per_game_from_pmf(pmf: np.ndarray, y: np.ndarray | Iterable[int]) -> np.ndarray:
+    """Per-observation CRPS for a discrete distribution over {0..K}.
+
+    CRPS_i = sum_k (F_i(k) - 1{k >= y_i})^2 where F is the forecast CDF. Returning
+    the per-game vector (rather than only its mean) is what lets downstream code
+    bootstrap paired score differences between two models on the same games.
+    """
     if pmf.ndim != 2:
         raise ValueError(f"pmf must be 2D, got shape={pmf.shape}")
     y = _as_1d(y).astype(int)
@@ -243,8 +257,12 @@ def crps_from_pmf(pmf: np.ndarray, y: np.ndarray | Iterable[int]) -> float:
     cdf = np.cumsum(pmf, axis=1)
     ks = np.arange(pmf.shape[1])[None, :]
     obs_cdf = (ks >= y[:, None]).astype(float)
-    crps = np.mean(np.sum((cdf - obs_cdf) ** 2, axis=1))
-    return float(crps)
+    return np.sum((cdf - obs_cdf) ** 2, axis=1)
+
+
+def crps_from_pmf(pmf: np.ndarray, y: np.ndarray | Iterable[int]) -> float:
+    """Mean CRPS for a discrete distribution over {0..K}."""
+    return float(np.mean(crps_per_game_from_pmf(pmf, y)))
 
 def randomized_pit(
     pmf: np.ndarray,

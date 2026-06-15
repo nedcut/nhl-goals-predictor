@@ -23,7 +23,7 @@ from .config import config
 from .conformal import split_conformal_interval
 from .model import get_feature_columns
 from .probabilistic import (
-    crps_from_pmf,
+    crps_per_game_from_pmf,
     fit_nb2_alpha,
     fit_poisson_mixture,
     nb2_pmf_matrix,
@@ -78,23 +78,29 @@ class CVForecastResult:
     reliability_bins: list
     pit_values: list[float]
     diagnostics: list[dict[str, Any]] | None = None
+    # Per-game score components pooled across all folds, keyed by metric name.
+    # game_key aligns the same game across models so scores can be paired.
+    per_game: dict[str, Any] | None = None
+
+    _METRIC_KEYS = (
+        "mae",
+        "rmse",
+        "poisson_nll",
+        "dist_nll",
+        "crps",
+        "over_brier",
+        "over_log_loss",
+        "conformal_q",
+    )
 
     @property
     def metrics_mean(self) -> dict[str, float]:
-        keys = [
-            "mae",
-            "rmse",
-            "poisson_nll",
-            "dist_nll",
-            "crps",
-            "over_brier",
-            "over_log_loss",
-            "conformal_q",
-        ]
-        out: dict[str, float] = {}
-        for k in keys:
-            out[k] = float(np.mean([getattr(f, k) for f in self.folds]))
-        return out
+        return {k: float(np.mean([getattr(f, k) for f in self.folds])) for k in self._METRIC_KEYS}
+
+    @property
+    def metrics_std(self) -> dict[str, float]:
+        """Across-fold standard deviation for each metric (sampling noise proxy)."""
+        return {k: float(np.std([getattr(f, k) for f in self.folds])) for k in self._METRIC_KEYS}
 
 
 def _fit_point_model(
@@ -212,6 +218,13 @@ def time_series_cv_forecast(
     folds: list[FoldForecastMetrics] = []
     diagnostics_rows: list[dict[str, Any]] = []
 
+    # Per-game score components pooled across folds (for paired significance tests).
+    per_game_keys: list[str] = []
+    per_game_abs_err: list[float] = []
+    per_game_crps: list[float] = []
+    per_game_nll: list[float] = []
+    per_game_brier: list[float] = []
+
     def _rest_bucket(rest_diff: float) -> str:
         if pd.isna(rest_diff):
             return "unknown"
@@ -257,46 +270,64 @@ def time_series_cv_forecast(
         y_test = test_df["totalGoals"].to_numpy(dtype=float)
 
         # Fit distribution calibration params on calibration slice only
-        dist_nll = float("nan")
         pmf_test: np.ndarray
         if dist_model == "poisson":
             pmf_test = poisson_pmf_matrix(mu_test, max_goals=max_goals)
-            dist_nll = poisson_nll(y_test, mu_test)
         elif dist_model == "nb2":
             alpha_hat = fit_nb2_alpha(y_cal, mu_cal)
             pmf_test = nb2_pmf_matrix(mu_test, alpha=alpha_hat, max_goals=max_goals)
-            # NLL under NB2 via pmf lookup (avoids recomputing lgamma for y_test)
-            p_y = np.take_along_axis(pmf_test, y_test.astype(int)[:, None].clip(0, max_goals), axis=1).squeeze(1)
-            dist_nll = float(-np.mean(np.log(np.clip(p_y, 1e-12, 1.0))))
         elif dist_model == "poisson_mixture":
             w_hat, m_hat = fit_poisson_mixture(y_cal, mu_cal, max_goals=max_goals)
             pmf_test = poisson_mixture_pmf_matrix(mu_test, weight=w_hat, multiplier=m_hat, max_goals=max_goals)
-            p_y = np.take_along_axis(pmf_test, y_test.astype(int)[:, None].clip(0, max_goals), axis=1).squeeze(1)
-            dist_nll = float(-np.mean(np.log(np.clip(p_y, 1e-12, 1.0))))
         else:
             raise ValueError(f"Unknown dist_model: {dist_model}")
 
+        # Per-game NLL under the fitted distribution, via PMF lookup. Using the
+        # same (renormalized) PMF that drives CRPS/over-probabilities keeps every
+        # score consistent with the distribution actually deployed.
+        y_idx = y_test.astype(int)[:, None].clip(0, max_goals)
+        p_y = np.take_along_axis(pmf_test, y_idx, axis=1).squeeze(1)
+        nll_per_game = -np.log(np.clip(p_y, 1e-12, 1.0))
+        dist_nll = float(np.mean(nll_per_game))
+
         # Point metrics
-        mae = float(mean_absolute_error(y_test, mu_test))
+        abs_err = np.abs(y_test - mu_test)
+        mae = float(np.mean(abs_err))
         rmse = float(root_mean_squared_error(y_test, mu_test))
         p_nll = poisson_nll(y_test, mu_test)
 
         # Proper scoring rule for the chosen distribution
-        crps = crps_from_pmf(pmf_test, y_test.astype(int))
+        crps_per_game = crps_per_game_from_pmf(pmf_test, y_idx.squeeze(1))
+        crps = float(np.mean(crps_per_game))
         pit_values.extend(randomized_pit(pmf_test, y_test.astype(int)).tolist())
 
         # Over/under event evaluation
         p_over = prob_over_from_pmf(pmf_test, threshold=threshold)
         y_over = (y_test > threshold).astype(int)
-        over_brier = _brier_score(p_over, y_over)
+        brier_per_game = (p_over - y_over) ** 2
+        over_brier = float(np.mean(brier_per_game))
         over_ll = _log_loss(p_over, y_over)
 
         all_over_p.extend(p_over.tolist())
         all_over_y.extend(y_over.tolist())
 
-        # Conformal interval based on calibration residuals (split-conformal)
-        lo, hi, q = split_conformal_interval(y_cal, mu_cal, mu_test, alpha=0.1, clip_lower=0.0)
-        _ = lo, hi  # intervals can be returned by higher-level code if needed
+        # Stable per-game key so the same game can be paired across models.
+        game_keys = (
+            test_df["date"].astype(str)
+            + "|"
+            + test_df.get("homeTeam", pd.Series([""] * len(test_df))).astype(str)
+            + "|"
+            + test_df.get("awayTeam", pd.Series([""] * len(test_df))).astype(str)
+        ).to_numpy()
+        per_game_keys.extend(game_keys.tolist())
+        per_game_abs_err.extend(abs_err.tolist())
+        per_game_crps.extend(crps_per_game.tolist())
+        per_game_nll.extend(nll_per_game.tolist())
+        per_game_brier.extend(brier_per_game.tolist())
+
+        # Conformal interval radius based on calibration residuals (split-conformal).
+        # Only the quantile radius q feeds the reported metric; bounds are derivable.
+        _, _, q = split_conformal_interval(y_cal, mu_cal, mu_test, alpha=0.1, clip_lower=0.0)
 
         folds.append(
             FoldForecastMetrics(
@@ -349,6 +380,14 @@ def time_series_cv_forecast(
 
     bins = reliability_curve(np.asarray(all_over_p), np.asarray(all_over_y), n_bins=10)
 
+    per_game = {
+        "game_key": np.asarray(per_game_keys, dtype=object),
+        "abs_error": np.asarray(per_game_abs_err, dtype=float),
+        "crps": np.asarray(per_game_crps, dtype=float),
+        "dist_nll": np.asarray(per_game_nll, dtype=float),
+        "over_brier": np.asarray(per_game_brier, dtype=float),
+    }
+
     return CVForecastResult(
         point_model=point_model,
         dist_model=dist_model,
@@ -358,4 +397,5 @@ def time_series_cv_forecast(
         reliability_bins=bins,
         pit_values=pit_values,
         diagnostics=diagnostics_rows if return_diagnostics else None,
+        per_game=per_game,
     )
