@@ -162,4 +162,3 @@ def fetch_live_states(game_pks: Iterable[int]) -> Dict[int, dict[str, Any]]:
         except Exception as e:
             logger.warning("Failed to fetch live state for gamePk=%s: %s", game_pk, e)
     return out
-

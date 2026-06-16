@@ -75,4 +75,3 @@ class TeamStrengthPoissonModel:
             features.append("season")
         mu = self.pipeline.predict(df[features])
         return np.clip(mu, 1e-9, None)
-

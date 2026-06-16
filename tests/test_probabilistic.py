@@ -47,4 +47,3 @@ def test_reliability_curve_bins_sum_counts():
     y = (p > 0.5).astype(int)
     bins = reliability_curve(p, y, n_bins=10)
     assert sum(b.count for b in bins) == 100
-

@@ -138,4 +138,3 @@ def train_xgb_per_season_importance(
 
     imp_df = pd.DataFrame(out).fillna(0.0)
     return imp_df
-

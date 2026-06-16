@@ -226,4 +226,3 @@ def write_champion_reports(
     )
     md_path.write_text(md)
     return payload
-

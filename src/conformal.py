@@ -58,4 +58,3 @@ def split_conformal_interval(
     if clip_lower is not None:
         lo = np.maximum(lo, clip_lower)
     return lo, hi, q
-

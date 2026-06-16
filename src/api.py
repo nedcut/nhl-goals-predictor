@@ -441,6 +441,7 @@ async def dashboard():
             f"<td style='text-align:right'>[{g.pi80_low}, {g.pi80_high}]</td>"
             "</tr>"
         )
+    table_rows = "".join(rows) if rows else '<tr><td colspan="5">No games found.</td></tr>'
 
     html = f"""
     <html>
@@ -469,7 +470,7 @@ async def dashboard():
             </tr>
           </thead>
           <tbody>
-            {''.join(rows) if rows else '<tr><td colspan=\"5\">No games found.</td></tr>'}
+            {table_rows}
           </tbody>
         </table>
       </body>
