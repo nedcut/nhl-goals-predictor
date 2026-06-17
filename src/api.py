@@ -38,7 +38,7 @@ import pandas as pd
 
 from .artifacts import ModelArtifact
 from .data import build_dataset, recent_seasons
-from .features import add_features
+from .features import add_features, feature_fill_values, impute_features
 from .predict import (
     _prepare_upcoming_rows,
     fetch_upcoming_games,
@@ -161,6 +161,11 @@ class LivePredictionResponse(BaseModel):
 _artifact: Optional[ModelArtifact] = None
 _historical_df: Optional[pd.DataFrame] = None
 _prob_calibration: Optional[Dict[str, float]] = None
+# Per-feature fill values derived from the historical (training-representative)
+# distribution at startup. Used to impute missing features identically across the
+# calibration and inference paths, so served predictions match how the model was
+# evaluated instead of depending on the current request batch.
+_feature_impute: Optional[Dict[str, float]] = None
 
 # Default configuration
 DEFAULT_MODEL_PATH = Path(os.getenv("NHL_MODEL_PATH", "models/xgboost_v1"))
@@ -177,9 +182,14 @@ def _finite_or_none(value: float) -> Optional[float]:
     return numeric if math.isfinite(numeric) else None
 
 
+def _impute_features(X: pd.DataFrame) -> pd.DataFrame:
+    """Impute missing features using the startup-computed historical fill map."""
+    return impute_features(X, _feature_impute)
+
+
 def _load_startup_state() -> None:
     """Load model and historical data into module globals (called at startup)."""
-    global _artifact, _historical_df, _prob_calibration
+    global _artifact, _historical_df, _prob_calibration, _feature_impute
 
     # Load model
     model_path = DEFAULT_MODEL_PATH
@@ -209,15 +219,16 @@ def _load_startup_state() -> None:
             if hist.empty:
                 raise ValueError("No historical rows with complete features for calibration.")
 
+            # Derive training-representative fill values once, before any model-
+            # specific calibration, so inference and calibration impute identically
+            # even if the NB2/mixture fit below fails.
+            _feature_impute = feature_fill_values(hist, expected)
+
             # Use the last 20% of historical games as a calibration slice
             n_hist = len(hist)
             cal_size = max(1, int(0.2 * n_hist))
             cal = hist.iloc[n_hist - cal_size :].copy()
-            X_cal = cal.reindex(columns=expected).copy()
-            for col in X_cal.columns:
-                if X_cal[col].isna().any():
-                    m = X_cal[col].mean()
-                    X_cal[col] = X_cal[col].fillna(m if pd.notna(m) else 0.0)
+            X_cal = _impute_features(cal.reindex(columns=expected).copy())
 
             y_cal = cal["totalGoals"].to_numpy(dtype=float)
             mu_cal = _artifact.predict(X_cal)
@@ -370,11 +381,7 @@ async def get_probabilistic_predictions(
         raise HTTPException(status_code=503, detail="Could not compute features for upcoming games")
 
     expected = _artifact.metadata.feature_names
-    X = up.reindex(columns=expected).copy()
-    for col in X.columns:
-        if X[col].isna().any():
-            m = X[col].mean()
-            X[col] = X[col].fillna(m if pd.notna(m) else 0.0)
+    X = _impute_features(up.reindex(columns=expected).copy())
 
     mu = _artifact.predict(X).astype(float)
     if dist_model == "poisson":

@@ -23,7 +23,7 @@ from .artifacts import ModelArtifact
 from .conformal import split_conformal_interval
 from .config import config
 from .data import build_dataset, fetch_schedule_week, recent_seasons
-from .features import add_features
+from .features import add_features, feature_fill_values, impute_features
 from .live import apply_live_residual_update, fetch_live_states
 from .logging_config import get_logger, setup_logging
 from .probabilistic import (
@@ -163,14 +163,14 @@ def predict_games(
         for f in missing_features:
             upcoming_with_features[f] = pd.NA
 
-    # Prepare features for prediction in exact model order
-    X = upcoming_with_features[expected_features].copy()
+    # Training-representative fill values from the historical games (not the
+    # handful of upcoming rows), so a missing feature is imputed with a value the
+    # model actually saw during training rather than the request-batch mean.
+    historical_features = combined[~combined["gamePk"].isin(upcoming_game_ids)]
+    fill_values = feature_fill_values(historical_features, expected_features)
 
-    # Fill NaN values with column means from training data or zeros
-    for col in X.columns:
-        if X[col].isna().any():
-            col_mean = X[col].mean()
-            X[col] = X[col].fillna(col_mean if pd.notna(col_mean) else 0)
+    # Prepare features for prediction in exact model order
+    X = impute_features(upcoming_with_features[expected_features].copy(), fill_values)
 
     # Make predictions
     predictions = artifact.predict(X)
@@ -217,21 +217,20 @@ def predict_games_probabilistic(
     combined = combined.drop_duplicates(subset=["gamePk"], keep="first")
     combined = add_features(combined, include_goalies=False, include_xg=include_xg)
 
-    # Helper: build aligned feature matrix with simple imputation
-    def build_X(frame: pd.DataFrame) -> pd.DataFrame:
-        X = frame.reindex(columns=expected_features).copy()
-        for col in X.columns:
-            if X[col].isna().any():
-                m = X[col].mean()
-                X[col] = X[col].fillna(m if pd.notna(m) else 0.0)
-        return X
-
     # Calibrate dispersion and conformal radius using historical games only
     hist = combined[combined["_is_upcoming"] == False].copy()  # noqa: E712
     hist = hist.dropna(subset=["totalGoals"]).sort_values("date").reset_index(drop=True)
     hist = hist.dropna(subset=expected_features)
     if hist.empty:
         raise ValueError("No historical rows with complete features for calibration.")
+
+    # Training-representative fill values from the complete historical frame, so
+    # calibration and upcoming-game inference impute identically (not from the
+    # request batch mean).
+    fill_values = feature_fill_values(hist, expected_features)
+
+    def build_X(frame: pd.DataFrame) -> pd.DataFrame:
+        return impute_features(frame.reindex(columns=expected_features).copy(), fill_values)
 
     n_hist = len(hist)
     cal_size = max(1, int(cal_fraction * n_hist))

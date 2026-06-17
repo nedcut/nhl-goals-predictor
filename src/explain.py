@@ -22,7 +22,7 @@ from .explainability import (
     train_xgb_per_season_importance,
     feature_stability_matrix,
 )
-from .features import add_features
+from .features import add_features, feature_fill_values, impute_features
 from .logging_config import setup_logging
 
 
@@ -60,11 +60,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.model is not None and not args.skip_shap:
         artifact = ModelArtifact.load(args.model)
         expected = artifact.metadata.feature_names
-        X = df.reindex(columns=expected).copy()
-        for col in X.columns:
-            if X[col].isna().any():
-                m = X[col].mean()
-                X[col] = X[col].fillna(m if pd.notna(m) else 0.0)
+        fills = feature_fill_values(df, expected)
+        X = impute_features(df.reindex(columns=expected).copy(), fills)
 
         if len(X) > args.shap_sample:
             X = X.sample(n=args.shap_sample, random_state=42)

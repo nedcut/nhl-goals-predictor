@@ -26,7 +26,7 @@ Usage:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Tuple
+from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,6 +36,51 @@ from .logging_config import get_logger
 from .validation import validate_game_data
 
 logger = get_logger(__name__)
+
+
+def feature_fill_values(
+    frame: pd.DataFrame, columns: Iterable[str]
+) -> Dict[str, float]:
+    """Compute training-representative fill values for ``columns``.
+
+    Uses the median of each column over ``frame`` (a historical / training
+    feature frame). Columns absent from ``frame`` or with no finite median are
+    omitted, so callers fall back to a neutral default for them.
+    """
+    fills: Dict[str, float] = {}
+    for col in columns:
+        if col in frame.columns:
+            median = frame[col].median()
+            if pd.notna(median):
+                fills[col] = float(median)
+    return fills
+
+
+def impute_features(
+    X: pd.DataFrame, fill_values: Optional[Mapping[str, float]] = None
+) -> pd.DataFrame:
+    """Fill missing feature values from a precomputed, training-derived map.
+
+    The single imputation path shared by every prediction surface (API and CLI).
+    Each NaN is replaced with ``fill_values[col]`` when available, otherwise 0.0.
+
+    Imputing from a fixed training-derived map — rather than the mean of the
+    current request batch — keeps served predictions consistent with how the
+    model was evaluated and avoids the degenerate single-row case where the batch
+    mean is NaN and silently collapses to 0.0.
+    """
+    fills = fill_values or {}
+    imputed = []
+    for col in X.columns:
+        if X[col].isna().any():
+            fill = fills.get(col)
+            if fill is None or not pd.notna(fill):
+                fill = 0.0
+            X[col] = X[col].fillna(fill)
+            imputed.append(col)
+    if imputed:
+        logger.warning("Imputed missing features from training fills: %s", imputed)
+    return X
 
 
 def _build_team_game_log(df: pd.DataFrame) -> pd.DataFrame:

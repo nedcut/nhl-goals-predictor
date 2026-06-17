@@ -150,8 +150,25 @@ def get_feature_columns(df: pd.DataFrame, *, _use_registry: bool = True) -> List
         registered = df.attrs.get(FEATURE_COLUMNS_ATTR)
         if registered:
             present = [c for c in registered if c in df.columns]
+            missing = [c for c in registered if c not in df.columns]
+            if missing:
+                # The frame lost columns the registry expects (e.g. a merge/concat
+                # that dropped them). Surface it: silently training on a subset of
+                # the registered features would skew the model vs. its metadata.
+                logger.warning(
+                    "Feature registry lists %d column(s) absent from the frame: %s",
+                    len(missing),
+                    missing,
+                )
             if present:
                 return present
+        else:
+            # No registry stamp (e.g. df.attrs dropped by a pandas op since
+            # add_features). Detection below may resolve a different set than the
+            # model was trained on, so make the fallback observable.
+            logger.debug(
+                "No feature registry on frame; falling back to name-based detection."
+            )
 
     feature_cols: List[str] = []
     for col in df.columns:

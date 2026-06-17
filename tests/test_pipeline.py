@@ -214,6 +214,45 @@ class TestValidation:
 # =============================================================================
 
 
+class TestFeatureImputation:
+    """Tests for the shared training-representative feature imputation."""
+
+    def test_feature_fill_values_uses_median_and_skips_unknowns(self):
+        from src.features import feature_fill_values
+
+        hist = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [np.nan, np.nan, np.nan]})
+        fills = feature_fill_values(hist, ["a", "b", "missing"])
+
+        assert fills["a"] == 2.0  # median of [1, 2, 3]
+        # All-NaN column has no finite median; absent column is skipped entirely.
+        assert "b" not in fills
+        assert "missing" not in fills
+
+    def test_impute_features_single_row_does_not_collapse_to_zero(self):
+        """A 1-row request with a NaN feature must use the training fill, not 0.0.
+
+        Regression: imputing with the request-batch mean made a single missing
+        value collapse to NaN -> 0.0, feeding the model an unseen value.
+        """
+        from src.features import feature_fill_values, impute_features
+
+        hist = pd.DataFrame({"home_avg_GF": [2.0, 3.0, 4.0]})
+        fills = feature_fill_values(hist, ["home_avg_GF"])
+
+        one_game = pd.DataFrame({"home_avg_GF": [np.nan]})
+        imputed = impute_features(one_game, fills)
+
+        assert imputed["home_avg_GF"].iloc[0] == 3.0  # training median, not 0.0
+
+    def test_impute_features_falls_back_to_zero_without_fill(self):
+        from src.features import impute_features
+
+        X = pd.DataFrame({"x": [np.nan, 1.0]})
+        imputed = impute_features(X, fill_values=None)
+
+        assert imputed["x"].iloc[0] == 0.0
+
+
 class TestFeatureEngineering:
     """Tests for feature engineering functions."""
 
