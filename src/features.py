@@ -5,25 +5,28 @@ The functions in this module operate on the raw game logs produced by
 `src.data.build_dataset`. They generate rolling averages and other features
 that capture team performance, fatigue, and momentum.
 
-Features generated (20 total):
-- Rolling goals for/against averages (home_avg_GF, away_avg_GF, etc.)
+Features generated (40+ total with multi-window enabled):
+- Rolling goals for/against averages at multiple windows (5, 10, 20, 40 games)
 - Rest days and back-to-back indicators (home_rest_days, home_is_back_to_back)
 - Win streaks (home_win_streak, away_win_streak)
 - Win percentages (home_win_pct, away_win_pct)
 - Games played in season (home_games_played, away_games_played)
 - Goalie rolling stats (home_goalie_sv_pct, home_goalie_gaa, etc.)
+- Interaction features (matchup dynamics like scoring_opportunity, opponent_threat)
+- Temporal features (month, days_into_season)
 
 Usage:
     from src.data import build_dataset
     from src.features import add_features
 
     df = build_dataset(['20232024', '20242025'])
-    df_features = add_features(df, window=20, include_goalies=True)
+    df_features = add_features(df, include_goalies=True)
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from datetime import datetime
+from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -35,6 +38,51 @@ from .validation import validate_game_data
 logger = get_logger(__name__)
 
 
+def feature_fill_values(
+    frame: pd.DataFrame, columns: Iterable[str]
+) -> Dict[str, float]:
+    """Compute training-representative fill values for ``columns``.
+
+    Uses the median of each column over ``frame`` (a historical / training
+    feature frame). Columns absent from ``frame`` or with no finite median are
+    omitted, so callers fall back to a neutral default for them.
+    """
+    fills: Dict[str, float] = {}
+    for col in columns:
+        if col in frame.columns:
+            median = frame[col].median()
+            if pd.notna(median):
+                fills[col] = float(median)
+    return fills
+
+
+def impute_features(
+    X: pd.DataFrame, fill_values: Optional[Mapping[str, float]] = None
+) -> pd.DataFrame:
+    """Fill missing feature values from a precomputed, training-derived map.
+
+    The single imputation path shared by every prediction surface (API and CLI).
+    Each NaN is replaced with ``fill_values[col]`` when available, otherwise 0.0.
+
+    Imputing from a fixed training-derived map — rather than the mean of the
+    current request batch — keeps served predictions consistent with how the
+    model was evaluated and avoids the degenerate single-row case where the batch
+    mean is NaN and silently collapses to 0.0.
+    """
+    fills = fill_values or {}
+    imputed = []
+    for col in X.columns:
+        if X[col].isna().any():
+            fill = fills.get(col)
+            if fill is None or not pd.notna(fill):
+                fill = 0.0
+            X[col] = X[col].fillna(fill)
+            imputed.append(col)
+    if imputed:
+        logger.warning("Imputed missing features from training fills: %s", imputed)
+    return X
+
+
 def _build_team_game_log(df: pd.DataFrame) -> pd.DataFrame:
     """Convert game-level data to team-game-level data.
 
@@ -43,6 +91,9 @@ def _build_team_game_log(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
+    for col in ("homeScore", "awayScore", "totalGoals"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # Home team perspective
     home = df[["gamePk", "season", "date", "homeTeam", "homeScore", "awayScore"]].copy()
@@ -60,8 +111,14 @@ def _build_team_game_log(df: pd.DataFrame) -> pd.DataFrame:
     team_log = pd.concat([home, away], ignore_index=True)
     team_log = team_log.sort_values(["team", "date"]).reset_index(drop=True)
 
-    # Add derived columns
-    team_log["win"] = (team_log["goals_for"] > team_log["goals_against"]).astype(int)
+    # Preserve unknown outcomes for future games. Treating them as losses would
+    # contaminate rolling win rate and streak features for later scheduled games.
+    completed = team_log["goals_for"].notna() & team_log["goals_against"].notna()
+    team_log["win"] = np.where(
+        completed,
+        (team_log["goals_for"] > team_log["goals_against"]).astype(float),
+        np.nan,
+    )
     team_log["total_goals"] = team_log["goals_for"] + team_log["goals_against"]
 
     return team_log
@@ -94,8 +151,11 @@ def _compute_rolling_features(team_log: pd.DataFrame, window: int = 5) -> pd.Dat
         lambda x: x.shift(1).rolling(window, min_periods=1).mean()
     )
 
-    # Games played this season
-    team_log["games_played"] = grouped.cumcount()
+    # Number of completed prior games. Future schedule rows must not increment
+    # this feature for other future games in the same prediction batch.
+    team_log["games_played"] = grouped["win"].transform(
+        lambda x: x.notna().shift(1, fill_value=False).cumsum()
+    )
 
     # Rest days (days since last game)
     team_log["prev_game_date"] = grouped["date"].shift(1)
@@ -110,7 +170,8 @@ def _compute_rolling_features(team_log: pd.DataFrame, window: int = 5) -> pd.Dat
         current_streak = 0
         for i, val in enumerate(shifted):
             if pd.isna(val):
-                current_streak = 0
+                # Unknown future outcomes do not erase the last known streak.
+                pass
             elif val == 1:
                 current_streak = max(1, current_streak + 1)
             else:
@@ -182,6 +243,7 @@ def _compute_h2h_features(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
     """
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
+    df["totalGoals"] = pd.to_numeric(df["totalGoals"], errors="coerce")
     df = df.sort_values("date").reset_index(drop=True)
 
     # Create a consistent matchup key (alphabetical order)
@@ -222,6 +284,7 @@ def _compute_venue_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     """
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
+    df["totalGoals"] = pd.to_numeric(df["totalGoals"], errors="coerce")
     df = df.sort_values("date").reset_index(drop=True)
 
     # Use homeTeam as proxy for venue (each team has one home arena)
@@ -232,12 +295,257 @@ def _compute_venue_features(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     return df
 
 
+def _compute_multi_window_rolling(
+    team_log: pd.DataFrame,
+    windows: Tuple[int, ...] = (5, 10, 20, 40),
+) -> pd.DataFrame:
+    """Compute rolling features for multiple time windows.
+
+    Different windows capture different signals:
+    - 5 games: Recent form/hot streaks
+    - 10 games: Short-term trends
+    - 20 games: Medium-term baseline
+    - 40 games: Season-level ability
+
+    Parameters
+    ----------
+    team_log : pd.DataFrame
+        Team-game level data from _build_team_game_log().
+    windows : tuple of int
+        Window sizes to compute features for.
+
+    Returns
+    -------
+    pd.DataFrame
+        Team log with multi-window rolling features added.
+    """
+    team_log = team_log.copy()
+    grouped = team_log.groupby("team")
+
+    for w in windows:
+        suffix = f"_{w}g"
+
+        # Goals for/against rolling averages
+        team_log[f"avg_GF{suffix}"] = grouped["goals_for"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+        team_log[f"avg_GA{suffix}"] = grouped["goals_against"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+        team_log[f"avg_total{suffix}"] = grouped["total_goals"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+
+        # Win percentage
+        team_log[f"win_pct{suffix}"] = grouped["win"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+
+        # Goals standard deviation (scoring volatility)
+        team_log[f"std_GF{suffix}"] = grouped["goals_for"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=2).std()
+        )
+
+    return team_log
+
+
+def _add_xg_rolling_features(
+    team_log: pd.DataFrame,
+    *,
+    seasons: Tuple[str, ...],
+    xg_windows: Tuple[int, ...],
+) -> pd.DataFrame:
+    """Join team-level xG rows and compute no-leakage rolling xG features."""
+    from .xg import build_xg_team_log
+
+    team_log = team_log.copy()
+    xg_log = build_xg_team_log(seasons, use_cache=True)
+    if xg_log.empty:
+        return team_log
+
+    xg_log = xg_log.copy()
+    xg_log["season"] = xg_log["season"].astype(str)
+    xg_log["date"] = pd.to_datetime(xg_log["date"]).dt.strftime("%Y-%m-%d")
+
+    team_log["season"] = team_log["season"].astype(str)
+    team_log["date"] = pd.to_datetime(team_log["date"]).dt.strftime("%Y-%m-%d")
+
+    team_log = team_log.merge(
+        xg_log,
+        on=["season", "date", "team", "opponent"],
+        how="left",
+    )
+
+    grouped = team_log.groupby("team")
+    for w in xg_windows:
+        suffix = f"_{w}g"
+        team_log[f"avg_xGF{suffix}"] = grouped["xGF"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+        team_log[f"avg_xGA{suffix}"] = grouped["xGA"].transform(
+            lambda x: x.shift(1).rolling(w, min_periods=1).mean()
+        )
+
+    return team_log
+
+
+def _compute_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute interaction features capturing matchup dynamics.
+
+    These features capture how team strengths/weaknesses interact:
+    - scoring_opportunity: High offense vs weak defense
+    - opponent_threat: Opponent offense vs our defense
+    - rest_advantage: Relative rest between teams
+    - form_diff: Difference in recent win percentage
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Game data with rolling features already added.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data with interaction features added.
+    """
+    df = df.copy()
+
+    # Scoring opportunity: home offense vs away defense
+    if "home_avg_GF" in df.columns and "away_avg_GA" in df.columns:
+        df["scoring_opportunity"] = df["home_avg_GF"] * df["away_avg_GA"]
+        df["opponent_threat"] = df["away_avg_GF"] * df["home_avg_GA"]
+
+    # Rest advantage (positive = home team more rested)
+    if "home_rest_days" in df.columns and "away_rest_days" in df.columns:
+        df["rest_advantage"] = df["home_rest_days"] - df["away_rest_days"]
+        # Capped rest days difference (extreme values less meaningful)
+        df["rest_advantage_capped"] = df["rest_advantage"].clip(-5, 5)
+
+    # Form difference (recent performance gap)
+    if "home_win_pct" in df.columns and "away_win_pct" in df.columns:
+        df["form_diff"] = df["home_win_pct"] - df["away_win_pct"]
+
+    # Combined team totals (expected game total based on both teams)
+    if "home_avg_total" in df.columns and "away_avg_total" in df.columns:
+        df["combined_avg_total"] = (df["home_avg_total"] + df["away_avg_total"]) / 2
+
+    # Multi-window interactions (if available)
+    for w in [5, 10, 20, 40]:
+        suffix = f"_{w}g"
+        home_gf = f"home_avg_GF{suffix}"
+        away_ga = f"away_avg_GA{suffix}"
+        away_gf = f"away_avg_GF{suffix}"
+        home_ga = f"home_avg_GA{suffix}"
+
+        if home_gf in df.columns and away_ga in df.columns:
+            df[f"scoring_opp{suffix}"] = df[home_gf] * df[away_ga]
+            df[f"opp_threat{suffix}"] = df[away_gf] * df[home_ga]
+
+    # Goalie interaction features (if goalie data present)
+    if "home_goalie_sv_pct" in df.columns and "away_avg_GF" in df.columns:
+        # Goalie quality vs opponent offense
+        df["home_goalie_vs_offense"] = df["home_goalie_sv_pct"] * df["away_avg_GF"]
+        df["away_goalie_vs_offense"] = df["away_goalie_sv_pct"] * df["home_avg_GF"]
+
+    return df
+
+
+def _compute_xg_derived_features(df: pd.DataFrame, xg_windows: Tuple[int, ...]) -> pd.DataFrame:
+    """Add xG-vs-goals deltas and matchup interactions for each xG window."""
+    df = df.copy()
+    for w in xg_windows:
+        suffix = f"_{w}g"
+        home_xgf = f"home_avg_xGF{suffix}"
+        away_xgf = f"away_avg_xGF{suffix}"
+        home_xga = f"home_avg_xGA{suffix}"
+        away_xga = f"away_avg_xGA{suffix}"
+        home_gf = f"home_avg_GF{suffix}"
+        away_gf = f"away_avg_GF{suffix}"
+
+        if all(c in df.columns for c in [home_xgf, home_gf]):
+            df[f"home_xg_diff_{w}g"] = df[home_xgf] - df[home_gf]
+        if all(c in df.columns for c in [away_xgf, away_gf]):
+            df[f"away_xg_diff_{w}g"] = df[away_xgf] - df[away_gf]
+        if all(c in df.columns for c in [home_xgf, away_xga]):
+            df[f"xg_scoring_opp_{w}g"] = df[home_xgf] * df[away_xga]
+        if all(c in df.columns for c in [away_xgf, home_xga]):
+            df[f"xg_opp_threat_{w}g"] = df[away_xgf] * df[home_xga]
+    return df
+
+
+def _compute_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute temporal and seasonal features.
+
+    NHL scoring patterns vary throughout the season:
+    - Early season: More goals (teams finding form)
+    - Late season: Tighter games (playoff implications)
+    - Day of week: Possible scheduling effects
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Game data with date column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data with temporal features added.
+    """
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+
+    # Month (captures seasonal patterns)
+    df["month"] = df["date"].dt.month
+
+    # Day of week (0=Monday, 6=Sunday)
+    df["day_of_week"] = df["date"].dt.dayofweek
+
+    # Weekend indicator (Saturday=5, Sunday=6)
+    df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
+
+    # Days into season (from the season start month/day of the appropriate season year).
+    # Vectorized: games on/after the season start month belong to the current calendar
+    # year, earlier games belong to the previous calendar year.
+    season_start_month = config.features.season_start_month
+    season_start_day = config.features.season_start_day
+    game_dates = df["date"]
+    season_start_year = np.where(
+        game_dates.dt.month >= season_start_month,
+        game_dates.dt.year,
+        game_dates.dt.year - 1,
+    )
+    season_start = pd.to_datetime(
+        {
+            "year": season_start_year,
+            "month": season_start_month,
+            "day": season_start_day,
+        }
+    )
+    df["days_into_season"] = (game_dates - season_start.values).dt.days
+
+    # Normalized season progress (0 = start, 1 = end of regular season ~180 days)
+    df["season_progress"] = (df["days_into_season"] / 180).clip(0, 1)
+
+    # Late season indicator (last 2 months - playoff race)
+    df["is_late_season"] = (df["days_into_season"] > 140).astype(int)
+
+    # Early season indicator (first month - teams finding form)
+    df["is_early_season"] = (df["days_into_season"] < 30).astype(int)
+
+    return df
+
+
 def add_features(
     df: pd.DataFrame,
     *,
     window: int | None = None,
     min_games: int | None = None,
     include_goalies: bool | None = None,
+    include_xg: bool | None = None,
+    require_xg: bool = False,
+    include_multi_window: bool | None = None,
+    include_interactions: bool | None = None,
+    include_temporal: bool | None = None,
 ) -> pd.DataFrame:
     """Add all features to the game dataset.
 
@@ -258,6 +566,22 @@ def add_features(
     include_goalies : bool, optional
         If True, add goalie features (requires goalie data to be fetched).
         Defaults to config value.
+    include_xg : bool, optional
+        If True, add MoneyPuck rolling xG features when available.
+        If unavailable, logs a warning and continues without xG columns.
+    require_xg : bool
+        If True, raise when xG was requested but no xG feature columns were
+        produced. Intended for evaluation pipelines that must not silently
+        label a no-xG run as a full xG model.
+    include_multi_window : bool, optional
+        If True, compute rolling stats for multiple windows (5, 10, 20, 40 games).
+        Defaults to config value.
+    include_interactions : bool, optional
+        If True, add interaction features (matchup dynamics).
+        Defaults to config value.
+    include_temporal : bool, optional
+        If True, add temporal/seasonal features (month, days_into_season).
+        Defaults to config value.
 
     Returns
     -------
@@ -271,6 +595,14 @@ def add_features(
         min_games = config.features.min_games
     if include_goalies is None:
         include_goalies = config.features.include_goalies
+    if include_xg is None:
+        include_xg = config.features.include_xg
+    if include_multi_window is None:
+        include_multi_window = config.features.include_multi_window
+    if include_interactions is None:
+        include_interactions = config.features.include_interactions
+    if include_temporal is None:
+        include_temporal = config.features.include_temporal
 
     if df.empty:
         return df.copy()
@@ -281,26 +613,74 @@ def add_features(
     # Build team-level game log
     team_log = _build_team_game_log(df)
 
-    # Compute rolling features
+    # Compute rolling features (primary window)
     team_log = _compute_rolling_features(team_log, window=window)
 
-    # Set features to NaN for teams without enough history
+    # Compute multi-window rolling features if enabled
+    if include_multi_window:
+        team_log = _compute_multi_window_rolling(
+            team_log, windows=config.features.rolling_windows
+        )
+        logger.debug("Added multi-window features for windows: %s", config.features.rolling_windows)
+
+    # Add optional rolling xG features
+    if include_xg:
+        try:
+            seasons = tuple(sorted(df["season"].astype(str).unique()))
+            team_log = _add_xg_rolling_features(
+                team_log,
+                seasons=seasons,
+                xg_windows=config.features.xg_windows,
+            )
+            logger.debug("Added xG rolling features for windows: %s", config.features.xg_windows)
+        except Exception as e:
+            if require_xg:
+                raise RuntimeError("xG features were required but could not be loaded") from e
+            logger.warning("Could not add xG features; proceeding without xG columns: %s", e)
+
+        has_xg_features = any(c.startswith("avg_xGF_") for c in team_log.columns)
+        if require_xg and not has_xg_features:
+            raise RuntimeError("xG features were required but no xG rows matched the game data")
+
+    # Base feature columns (from primary window)
     feature_cols = ["avg_GF", "avg_GA", "avg_total", "win_pct", "rest_days",
                     "is_back_to_back", "win_streak", "home_win_pct", "away_win_pct"]
+
+    # Add multi-window feature columns
+    multi_window_cols = []
+    if include_multi_window:
+        for w in config.features.rolling_windows:
+            suffix = f"_{w}g"
+            multi_window_cols.extend([
+                f"avg_GF{suffix}", f"avg_GA{suffix}", f"avg_total{suffix}",
+                f"win_pct{suffix}", f"std_GF{suffix}"
+            ])
+
+    xg_cols = []
+    if include_xg:
+        for w in config.features.xg_windows:
+            suffix = f"_{w}g"
+            xg_cols.extend([f"avg_xGF{suffix}", f"avg_xGA{suffix}"])
+
+    all_feature_cols = feature_cols + multi_window_cols + xg_cols
+
+    # Set features to NaN for teams without enough history
     mask = team_log["games_played"] < min_games
-    team_log.loc[mask, feature_cols] = np.nan
+    # Only set NaN for columns that exist
+    cols_to_nan = [c for c in all_feature_cols if c in team_log.columns]
+    team_log.loc[mask, cols_to_nan] = np.nan
 
     # Split back into home and away
     home_feats = team_log[team_log["is_home"]].copy()
     away_feats = team_log[~team_log["is_home"]].copy()
 
     # Rename columns for home team
-    home_rename = {col: f"home_{col}" for col in feature_cols}
+    home_rename = {col: f"home_{col}" for col in all_feature_cols if col in home_feats.columns}
     home_rename["games_played"] = "home_games_played"
     home_feats = home_feats.rename(columns=home_rename)
 
     # Rename columns for away team
-    away_rename = {col: f"away_{col}" for col in feature_cols}
+    away_rename = {col: f"away_{col}" for col in all_feature_cols if col in away_feats.columns}
     away_rename["games_played"] = "away_games_played"
     away_feats = away_feats.rename(columns=away_rename)
 
@@ -327,8 +707,29 @@ def add_features(
     # Add venue-specific features
     df_out = _compute_venue_features(df_out, window=window)
 
+    # Add temporal features if enabled
+    if include_temporal:
+        df_out = _compute_temporal_features(df_out)
+        logger.debug("Added temporal features")
+
+    # Add interaction features if enabled (must be after other features)
+    if include_interactions:
+        df_out = _compute_interaction_features(df_out)
+        logger.debug("Added interaction features")
+
+    if include_xg:
+        df_out = _compute_xg_derived_features(df_out, config.features.xg_windows)
+
     # Sort by date
     df_out = df_out.sort_values("date").reset_index(drop=True)
+
+    # Stamp the engineered feature columns onto the frame so downstream callers
+    # can read the authoritative list instead of re-deriving it from fragile
+    # name prefixes. df.attrs survives most pandas ops; callers fall back to
+    # prefix detection when it does not.
+    from .model import FEATURE_COLUMNS_ATTR, get_feature_columns
+
+    df_out.attrs[FEATURE_COLUMNS_ATTR] = get_feature_columns(df_out, _use_registry=False)
 
     return df_out
 

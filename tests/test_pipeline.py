@@ -214,6 +214,45 @@ class TestValidation:
 # =============================================================================
 
 
+class TestFeatureImputation:
+    """Tests for the shared training-representative feature imputation."""
+
+    def test_feature_fill_values_uses_median_and_skips_unknowns(self):
+        from src.features import feature_fill_values
+
+        hist = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [np.nan, np.nan, np.nan]})
+        fills = feature_fill_values(hist, ["a", "b", "missing"])
+
+        assert fills["a"] == 2.0  # median of [1, 2, 3]
+        # All-NaN column has no finite median; absent column is skipped entirely.
+        assert "b" not in fills
+        assert "missing" not in fills
+
+    def test_impute_features_single_row_does_not_collapse_to_zero(self):
+        """A 1-row request with a NaN feature must use the training fill, not 0.0.
+
+        Regression: imputing with the request-batch mean made a single missing
+        value collapse to NaN -> 0.0, feeding the model an unseen value.
+        """
+        from src.features import feature_fill_values, impute_features
+
+        hist = pd.DataFrame({"home_avg_GF": [2.0, 3.0, 4.0]})
+        fills = feature_fill_values(hist, ["home_avg_GF"])
+
+        one_game = pd.DataFrame({"home_avg_GF": [np.nan]})
+        imputed = impute_features(one_game, fills)
+
+        assert imputed["home_avg_GF"].iloc[0] == 3.0  # training median, not 0.0
+
+    def test_impute_features_falls_back_to_zero_without_fill(self):
+        from src.features import impute_features
+
+        X = pd.DataFrame({"x": [np.nan, 1.0]})
+        imputed = impute_features(X, fill_values=None)
+
+        assert imputed["x"].iloc[0] == 0.0
+
+
 class TestFeatureEngineering:
     """Tests for feature engineering functions."""
 
@@ -232,6 +271,13 @@ class TestFeatureEngineering:
         # Check h2h and venue features
         assert "h2h_avg_goals" in df.columns
         assert "venue_avg_goals" in df.columns
+
+    def test_add_features_default_does_not_require_xg(self, sample_game_data):
+        """Backwards-compatibility: include_xg defaults to False."""
+        from src.features import add_features
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        assert not any(c.startswith("home_avg_xGF_") for c in df.columns)
 
     def test_add_features_preserves_original_columns(self, sample_game_data):
         """Original columns should be preserved after adding features."""
@@ -330,6 +376,71 @@ class TestFeatureEngineering:
 
         assert "venue_avg_goals" in result.columns
 
+    def test_future_games_do_not_change_outcome_history(self):
+        """Unknown scheduled results must not look like 0-0 losses."""
+        from src.features import add_features
+
+        games = pd.DataFrame(
+            [
+                {
+                    "gamePk": 1,
+                    "season": "20252026",
+                    "date": "2025-10-01",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team B",
+                    "homeScore": 3,
+                    "awayScore": 2,
+                    "totalGoals": 5,
+                },
+                {
+                    "gamePk": 2,
+                    "season": "20252026",
+                    "date": "2025-10-03",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team C",
+                    "homeScore": 4,
+                    "awayScore": 1,
+                    "totalGoals": 5,
+                },
+                {
+                    "gamePk": 3,
+                    "season": "20252026",
+                    "date": "2025-10-05",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team D",
+                    "homeScore": pd.NA,
+                    "awayScore": pd.NA,
+                    "totalGoals": pd.NA,
+                },
+                {
+                    "gamePk": 4,
+                    "season": "20252026",
+                    "date": "2025-10-07",
+                    "homeTeam": "Team A",
+                    "awayTeam": "Team E",
+                    "homeScore": pd.NA,
+                    "awayScore": pd.NA,
+                    "totalGoals": pd.NA,
+                },
+            ]
+        )
+
+        result = add_features(
+            games,
+            window=5,
+            min_games=1,
+            include_goalies=False,
+            include_multi_window=False,
+            include_interactions=False,
+            include_temporal=False,
+        )
+        later = result.loc[result["gamePk"] == 4].iloc[0]
+
+        assert later["home_avg_GF"] == pytest.approx(3.5)
+        assert later["home_win_pct"] == pytest.approx(1.0)
+        assert later["home_win_streak"] == 2
+        assert later["home_games_played"] == 2
+
 
 # =============================================================================
 # MODEL TRAINING TESTS
@@ -338,6 +449,22 @@ class TestFeatureEngineering:
 
 class TestModelTraining:
     """Tests for model training functions."""
+
+    def test_prepare_data_ignores_unrelated_nan_columns(self, sample_game_data):
+        """Rows should be dropped only for missing model inputs, not unrelated columns."""
+        from src.features import add_features
+        from src.model import get_feature_columns, prepare_data
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        df["unrelated_debug_col"] = np.nan
+
+        feature_cols = get_feature_columns(df)
+        expected_rows = len(df.dropna(subset=feature_cols + ["totalGoals"]))
+
+        X_train, X_test, _, _, _ = prepare_data(df, test_size=0.2)
+        used_rows = len(X_train) + len(X_test)
+
+        assert used_rows == expected_rows
 
     def test_prepare_data_splits_chronologically(self, sample_game_data):
         """Data should be split chronologically, not randomly."""
@@ -384,6 +511,9 @@ class TestModelTraining:
 
     def test_train_xgboost(self, sample_game_data):
         """XGBoost training should return TrainingResult."""
+        import os
+        if os.getenv("RUN_XGBOOST_TESTS") != "1":
+            pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
         from src.features import add_features
         from src.model import TrainingResult, train_xgboost
@@ -525,6 +655,26 @@ class TestArtifactPersistence:
         assert len(predictions) == len(X_test)
         assert all(p >= 0 for p in predictions)
 
+    def test_poisson_artifact_prediction_matches_training_model(self, sample_game_data, temp_model_dir):
+        """Saved Poisson artifacts should preserve preprocessing at inference time."""
+        from src.artifacts import ModelArtifact
+        from src.features import add_features
+        from src.model import prepare_data, train_poisson
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        result = train_poisson(df, test_size=0.2, alpha=1.0)
+
+        artifact = ModelArtifact.from_training_result(result)
+        model_path = temp_model_dir / "poisson_model"
+        artifact.save(model_path)
+        loaded = ModelArtifact.load(model_path)
+
+        _, X_test, _, _, _ = prepare_data(df, test_size=0.2)
+        original_pred = result.model.predict(X_test)
+        loaded_pred = loaded.predict(X_test)
+
+        assert np.allclose(original_pred, loaded_pred, atol=1e-10)
+
     def test_artifact_summary(self, sample_game_data):
         """Artifact summary should return readable string."""
         from src.artifacts import ModelArtifact
@@ -617,6 +767,34 @@ class TestDataModule:
                 mock_fetch.assert_not_called()
                 assert len(result) == len(sample_game_data)
 
+    def test_recent_seasons_roll_forward_from_calendar_date(self):
+        """Runtime defaults should include the active NHL season."""
+        from src.data import recent_seasons, season_for_date
+
+        as_of = datetime(2026, 6, 15)
+        assert season_for_date(as_of) == "20252026"
+        assert recent_seasons(2, as_of) == ["20242025", "20252026"]
+
+    def test_active_season_cache_freshness(self, sample_game_data, temp_cache_dir):
+        """Active-season data should age out instead of staying frozen forever."""
+        from src.data import _active_season_cache_is_fresh, get_cache_path, save_season_cache
+
+        season = "20252026"
+        save_season_cache(sample_game_data, season, temp_cache_dir)
+        cache_path = get_cache_path(season, temp_cache_dir)
+        written_at = datetime.fromtimestamp(cache_path.stat().st_mtime)
+
+        assert _active_season_cache_is_fresh(
+            season,
+            temp_cache_dir,
+            now=written_at + timedelta(hours=1),
+        )
+        assert not _active_season_cache_is_fresh(
+            season,
+            temp_cache_dir,
+            now=written_at + timedelta(hours=7),
+        )
+
 
 # =============================================================================
 # PREDICTION MODULE TESTS
@@ -678,6 +856,46 @@ class TestPredictionModule:
         assert all(predictions["predicted_total_goals"] >= 0)
         assert all(predictions["predicted_total_goals"] <= 20)
 
+    def test_prepare_upcoming_rows_removes_placeholder_scores(self):
+        """The NHL API's future 0-0 placeholders are not completed results."""
+        from src.predict import _prepare_upcoming_rows
+
+        upcoming = pd.DataFrame(
+            [
+                {
+                    "gamePk": 1,
+                    "homeScore": 0,
+                    "awayScore": 0,
+                    "totalGoals": 0,
+                }
+            ]
+        )
+        prepared = _prepare_upcoming_rows(upcoming)
+
+        assert prepared["_is_upcoming"].all()
+        assert prepared[["homeScore", "awayScore", "totalGoals"]].isna().all().all()
+
+    def test_fetch_upcoming_games_respects_requested_end_date(self):
+        """Schedule weeks can include games beyond the requested horizon."""
+        from src import predict
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 6, 15)
+
+        games = [
+            {"gamePk": 1, "date": "2026-06-15", "gameState": "FUT"},
+            {"gamePk": 2, "date": "2026-06-17", "gameState": "FUT"},
+            {"gamePk": 3, "date": "2026-06-18", "gameState": "FUT"},
+        ]
+
+        with patch("src.predict.datetime", FixedDateTime):
+            with patch("src.predict.fetch_schedule_week", return_value=games):
+                result = predict.fetch_upcoming_games(days_ahead=2)
+
+        assert result["gamePk"].tolist() == [1, 2]
+
 
 # =============================================================================
 # END-TO-END PIPELINE TESTS
@@ -686,6 +904,24 @@ class TestPredictionModule:
 
 class TestEndToEndPipeline:
     """End-to-end tests verifying the complete pipeline."""
+
+    def test_probabilistic_cv_poisson_glm_handles_feature_nans(self, sample_game_data):
+        """Poisson GLM evaluation path should handle early-season NaNs safely."""
+        from src.evaluation import time_series_cv_forecast
+        from src.features import add_features
+
+        df_features = add_features(
+            sample_game_data, window=5, min_games=3, include_goalies=False
+        )
+        result = time_series_cv_forecast(
+            df_features,
+            point_model="poisson_glm",
+            dist_model="poisson",
+            n_splits=3,
+            cal_fraction=0.2,
+        )
+
+        assert len(result.folds) == 3
 
     def test_full_pipeline_random_forest(self, sample_game_data, temp_model_dir):
         """Full pipeline: data → features → train RF → save → load → predict."""
@@ -732,6 +968,9 @@ class TestEndToEndPipeline:
 
     def test_full_pipeline_xgboost(self, sample_game_data, temp_model_dir):
         """Full pipeline with XGBoost model."""
+        import os
+        if os.getenv("RUN_XGBOOST_TESTS") != "1":
+            pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
         from src.artifacts import ModelArtifact
         from src.features import add_features
@@ -841,6 +1080,21 @@ class TestConfig:
         assert "max_depth" in params
         assert "learning_rate" in params
         assert "n_estimators" in params
+
+
+class TestLoggingConfig:
+    """Tests for logging setup behavior."""
+
+    def test_setup_logging_can_raise_log_level_after_initialization(self):
+        """setup_logging should reconfigure levels on subsequent calls."""
+        import logging
+        from src.logging_config import setup_logging
+
+        logger = setup_logging(level="INFO")
+        assert logger.level == logging.INFO
+
+        logger = setup_logging(level="DEBUG")
+        assert logger.level == logging.DEBUG
 
 
 # =============================================================================
@@ -1024,6 +1278,9 @@ class TestModelComparison:
 
     def test_compare_models_returns_dataframe(self, sample_game_data):
         """compare_models should return comparison DataFrame."""
+        import os
+        if os.getenv("RUN_XGBOOST_TESTS") != "1":
+            pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
         from src.features import add_features
         from src.model import compare_models

@@ -1,14 +1,12 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-NHL Total Goals Predictor - a machine learning pipeline that produces **probabilistic** forecasts of total goals in NHL games. It turns point predictions into full goal-total distributions (Poisson / NB2 / Poisson-mixture), evaluates with proper scoring rules, and selects a champion model under a weighted probabilistic objective. The XGBoost model uses rolling team statistics, goaltender metrics, xG, and head-to-head history; the `team_strength` Poisson regression is the normalization baseline.
+NHL Total Goals Predictor - a machine learning pipeline that produces **probabilistic** forecasts of total goals in NHL games (Poisson / NB2 / Poisson-mixture distributions), evaluated with proper scoring rules and a weighted probabilistic objective. The XGBoost model uses rolling team statistics, goaltender metrics, xG, and head-to-head history; the `team_strength` Poisson regression is the normalization baseline.
 
-**Current Performance (expanding-window time-series CV, 5 folds, NB2 calibration):** Champion `xgb_tuned` — MAE ≈ 1.869, CRPS ≈ 1.294, Brier(>6.5) ≈ 0.246, vs `team_strength` baseline MAE ≈ 1.886. Numbers are regenerated into `reports/champion_model_report.{json,md}` and `MODEL_CARD.md`.
-
-**Model selection is significance-aware:** the champion's margin over the runner-up is tested with a paired bootstrap over per-game scores (`src/significance.py`). Margins this small are frequently *within noise* — trust the bootstrap verdict, not the raw weighted-score ordering, before claiming one model beats another.
+**Current Performance (expanding-window time-series CV, 5 folds, NB2 calibration):** Champion `xgb_tuned` MAE ≈ 1.869 vs `team_strength` baseline MAE ≈ 1.886. Margins this small are routinely *within noise* — the champion's edge over the runner-up is tested with a paired bootstrap (`src/significance.py`); trust that verdict, not the raw weighted-score ordering. Numbers regenerate into `reports/champion_model_report.{json,md}` and `MODEL_CARD.md`.
 
 ## Commands
 
@@ -70,12 +68,7 @@ save_model(result, 'models/xgboost_v1', seasons=['20232024', '20242025'])
 | `data.py` | NHL API data fetching with per-season caching |
 | `features.py` | Rolling team stats, H2H history, venue trends |
 | `goalies.py` | Goalie data fetching and rolling save%/GAA |
-| `model.py` | Training, CV, Optuna optimization; `get_feature_columns` registry |
-| `probabilistic.py` | Goal-total distributions, CRPS/NLL, PIT, reliability |
-| `evaluation.py` | Time-series CV forecast + per-game scores + fold std |
-| `significance.py` | Paired-bootstrap model comparison (champion vs runner-up) |
-| `champion.py` | Weighted-objective ranking + significance-annotated reports |
-| `portfolio.py` | End-to-end orchestrator (CV → champion → model card) |
+| `model.py` | Training, CV, Optuna optimization |
 | `artifacts.py` | Model + metadata persistence |
 | `registry.py` | Model versioning and promotion |
 | `predict.py` | CLI for predictions |

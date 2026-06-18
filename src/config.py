@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Tuple
 
 
 @dataclass
@@ -37,10 +37,17 @@ class DataConfig:
     cache_dir: Path = field(default_factory=lambda: Path("data/raw"))
     goalie_cache_dir: Path = field(default_factory=lambda: Path("data/goalies"))
     goalie_cache_file: str = "goalie_stats.csv"
+    xg_cache_dir: Path = field(default_factory=lambda: Path("data/xg"))
+    active_season_cache_ttl_hours: int = 6
+    xg_url_template: str = (
+        "https://moneypuck.com/moneypuck/playerData/games/{season}/regular/teams.csv"
+    )
 
     # Request throttling
     request_delay: float = 0.2  # Delay between game data requests
     goalie_request_delay: float = 0.05  # Delay between goalie boxscore requests
+    xg_request_delay: float = 0.2
+    xg_request_timeout: int = 30
 
     # Season date ranges
     season_start_month: int = 10  # October
@@ -56,8 +63,9 @@ class DataConfig:
 class FeatureConfig:
     """Configuration for feature engineering."""
 
-    # Rolling window sizes
-    rolling_window: int = 20  # Window for team rolling stats (20 is optimal)
+    # Rolling window sizes (multiple windows capture different signals)
+    rolling_windows: Tuple[int, ...] = (5, 10, 20, 40)  # Short, medium, long-term
+    rolling_window: int = 20  # Default/primary window for backwards compatibility
     goalie_window: int = 10  # Window for goalie rolling stats
 
     # Minimum history requirements
@@ -65,6 +73,15 @@ class FeatureConfig:
 
     # Feature flags
     include_goalies: bool = True
+    include_xg: bool = False
+    include_multi_window: bool = True  # Use multiple rolling windows
+    include_interactions: bool = True  # Add interaction features
+    include_temporal: bool = True  # Add month/seasonality features
+    xg_windows: Tuple[int, ...] = (5, 10, 20)
+
+    # Season reference date (October 1st typically)
+    season_start_month: int = 10
+    season_start_day: int = 1
 
 
 @dataclass
@@ -80,15 +97,15 @@ class ModelConfig:
     # Random state for reproducibility
     random_state: int = 42
 
-    # Optimized XGBoost hyperparameters (beats baseline by ~0.6%)
+    # Current champion XGBoost hyperparameters under probabilistic time-series CV.
     xgb_params: Dict[str, float | int] = field(default_factory=lambda: {
-        "max_depth": 2,
-        "learning_rate": 0.01,
-        "n_estimators": 150,
-        "reg_alpha": 1.0,
-        "reg_lambda": 2.0,
-        "subsample": 0.7,
-        "colsample_bytree": 0.7,
+        "max_depth": 4,
+        "learning_rate": 0.011896873680695898,
+        "n_estimators": 65,
+        "reg_alpha": 1.7530910973690677,
+        "reg_lambda": 2.6740596452335668,
+        "subsample": 0.8393574607886646,
+        "colsample_bytree": 0.5556469177410432,
         "min_child_weight": 7,
     })
 

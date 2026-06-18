@@ -309,6 +309,11 @@ class ModelArtifact:
         array-like
             Predictions.
         """
+        # Backward compatibility: older Poisson/Ensemble artifacts stored a scaler
+        # on the estimator instance instead of using an sklearn Pipeline.
+        if hasattr(self.model, "_scaler"):
+            scaler = getattr(self.model, "_scaler")
+            return self.model.predict(scaler.transform(X))
         return self.model.predict(X)
 
     def summary(self) -> str:

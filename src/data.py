@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import argparse
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List, Optional, Set
 
@@ -44,6 +44,30 @@ CACHE_DIR = config.data.cache_dir
 # Season start dates (approximate - October of first year)
 SEASON_START_MONTH = config.data.season_start_month
 SEASON_END_MONTH = config.data.season_end_month
+
+
+def season_for_date(as_of: date | datetime | None = None) -> str:
+    """Return the NHL season code containing the given date.
+
+    Dates before October belong to the season that started in the prior
+    calendar year. For example, June 2026 maps to ``20252026``.
+    """
+    current = as_of or datetime.now()
+    year = current.year
+    month = current.month
+    start_year = year if month >= SEASON_START_MONTH else year - 1
+    return f"{start_year}{start_year + 1}"
+
+
+def recent_seasons(count: int = 2, as_of: date | datetime | None = None) -> List[str]:
+    """Return consecutive recent season codes ending with the active season."""
+    if count < 1:
+        raise ValueError("count must be at least 1")
+
+    active = season_for_date(as_of)
+    active_start = int(active[:4])
+    first_start = active_start - count + 1
+    return [f"{year}{year + 1}" for year in range(first_start, active_start + 1)]
 
 
 def _season_to_years(season: str) -> tuple[int, int]:
@@ -173,6 +197,23 @@ def load_cached_season(season: str, cache_dir: Path = CACHE_DIR) -> Optional[pd.
     return None
 
 
+def _active_season_cache_is_fresh(
+    season: str,
+    cache_dir: Path = CACHE_DIR,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether an active-season cache is recent enough for inference."""
+    path = get_cache_path(season, cache_dir)
+    if not path.exists():
+        return False
+
+    current = now or datetime.now()
+    age_seconds = current.timestamp() - path.stat().st_mtime
+    max_age_seconds = config.data.active_season_cache_ttl_hours * 60 * 60
+    return age_seconds <= max_age_seconds
+
+
 def save_season_cache(df: pd.DataFrame, season: str, cache_dir: Path = CACHE_DIR) -> None:
     """Save a season's data to the cache."""
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -212,9 +253,12 @@ def build_dataset(
         if use_cache:
             cached = load_cached_season(season)
             if cached is not None:
-                logger.info("Loaded %d games from cache for %s", len(cached), season)
-                all_results.append(cached)
-                continue
+                is_active = season == season_for_date()
+                if not is_active or _active_season_cache_is_fresh(season):
+                    logger.info("Loaded %d games from cache for %s", len(cached), season)
+                    all_results.append(cached)
+                    continue
+                logger.info("Refreshing stale active-season cache for %s", season)
 
         # Fetch from API
         df = fetch_season_games(season, delay=delay)
