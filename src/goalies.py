@@ -24,10 +24,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import requests
 from tqdm import tqdm
 
 from .config import config
+from .http_client import get_json
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -67,9 +67,7 @@ def fetch_game_goalies(game_id: int) -> Dict:
         - away_shots_against: shots against away goalie
     """
     url = f"{API_BASE}/gamecenter/{game_id}/boxscore"
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
+    data = get_json(url)
 
     result = {"gamePk": game_id}
 

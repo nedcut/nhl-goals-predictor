@@ -1135,13 +1135,12 @@ class TestAPIIntegration:
             ]
         }
 
-        with patch("src.data.requests.get") as mock_get:
-            mock_get.return_value = MagicMock(
-                status_code=200, json=lambda: mock_response
-            )
-
+        # fetch_schedule_week now routes through the shared resilient HTTP
+        # client (src.http_client.get_json), so patch that seam.
+        with patch("src.data.get_json", return_value=mock_response) as mock_get:
             games = fetch_schedule_week("2024-10-15")
 
+            mock_get.assert_called_once()
             assert len(games) == 1
             assert games[0]["homeTeam"] == "Boston Bruins"
             assert games[0]["awayTeam"] == "Toronto Maple Leafs"

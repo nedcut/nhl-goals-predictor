@@ -8,9 +8,9 @@ import re
 from typing import Any, Dict, Iterable
 
 import numpy as np
-import requests
 
 from .config import config
+from .http_client import get_json
 from .logging_config import get_logger
 from .probabilistic import nb2_pmf_matrix
 
@@ -147,9 +147,7 @@ def parse_gamecenter_payload(game_pk: int, payload: dict[str, Any]) -> dict[str,
 def fetch_live_game_state(game_pk: int) -> dict[str, Any]:
     """Fetch one game's live state from NHL gamecenter."""
     url = f"{config.data.api_base}/gamecenter/{int(game_pk)}/landing"
-    response = requests.get(url, timeout=config.data.request_timeout)
-    response.raise_for_status()
-    payload = response.json()
+    payload = get_json(url)
     return parse_gamecenter_payload(int(game_pk), payload)
 
 

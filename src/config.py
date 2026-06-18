@@ -49,6 +49,12 @@ class DataConfig:
     xg_request_delay: float = 0.2
     xg_request_timeout: int = 30
 
+    # Resilient HTTP behavior (see src/http_client.py)
+    user_agent: str = "nhl-goals-predictor/1.0 (+https://github.com/nedcut/nhl-goals-predictor)"
+    max_retries: int = 3  # Retry attempts after the initial request for transient failures
+    backoff_factor: float = 0.5  # Base seconds for exponential backoff (full jitter)
+    max_backoff_seconds: float = 30.0  # Cap on any single backoff sleep
+
     # Season date ranges
     season_start_month: int = 10  # October
     season_end_month: int = 6  # June

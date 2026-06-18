@@ -33,6 +33,7 @@ import requests
 from tqdm import tqdm
 
 from .config import config
+from .http_client import get_json
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -99,9 +100,7 @@ def fetch_schedule_week(date: str, include_upcoming: bool = False) -> List[dict]
         List of game dictionaries for the week.
     """
     url = f"{API_BASE}/schedule/{date}"
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
+    data = get_json(url)
 
     # Game states: OFF/FINAL = completed, FUT = future, PRE = pre-game, LIVE = in progress
     completed_states = ("OFF", "FINAL")

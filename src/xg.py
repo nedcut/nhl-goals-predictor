@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
-import requests
 
 from .config import config
+from .http_client import get_text
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -138,35 +138,17 @@ def load_cached_xg_season(season: str, cache_dir: Path | None = None) -> pd.Data
     return _standardize_xg_schema(cached, season=season)
 
 
-def fetch_xg_season(season: str, *, max_retries: int = 3, backoff_seconds: float = 1.0) -> pd.DataFrame:
+def fetch_xg_season(season: str) -> pd.DataFrame:
     """Fetch one season from MoneyPuck and standardize schema.
 
-    Retries transient network/HTTP errors with linear backoff before giving up.
-    Callers (e.g. ``_add_xg_rolling_features``) still wrap this for graceful
-    fallback, but retrying here smooths over the intermittently flaky feed.
+    Transient network/HTTP errors are retried by ``src.http_client`` (shared
+    Session with exponential backoff + jitter). Callers (e.g.
+    ``_add_xg_rolling_features``) still wrap this for graceful fallback.
     """
     url = config.data.xg_url_template.format(season=season)
     logger.info("Fetching MoneyPuck xG for %s from %s", season, url)
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = requests.get(url, timeout=config.data.xg_request_timeout)
-            response.raise_for_status()
-            break
-        except requests.RequestException as exc:
-            logger.warning(
-                "Error fetching MoneyPuck xG for %s (attempt %d/%d): %s",
-                season, attempt, max_retries, exc,
-            )
-            if attempt == max_retries:
-                logger.error(
-                    "Giving up after %d failed attempts to fetch MoneyPuck xG for %s",
-                    max_retries, season,
-                )
-                raise
-            time.sleep(backoff_seconds * attempt)
-
-    raw = pd.read_csv(io.StringIO(response.text))
+    text = get_text(url, timeout=config.data.xg_request_timeout)
+    raw = pd.read_csv(io.StringIO(text))
     return _standardize_xg_schema(raw, season=season)
 
 
