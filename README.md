@@ -67,6 +67,29 @@ Run tests:
 pytest -q
 ```
 
+## Development
+
+Tooling config is centralized in `pyproject.toml` and shared by CI and local
+runs. Install the dev dependencies and use the `Makefile` shortcuts:
+
+```bash
+make install     # runtime + dev deps (ruff, mypy, stubs)
+make lint        # ruff lint (F, E, W, I)
+make typecheck   # mypy over the typed surface
+make test        # pytest
+make cov         # pytest with coverage report
+make check       # lint + typecheck + test (the CI gate)
+```
+
+**Linting** uses a focused, high-signal Ruff ruleset (pyflakes, pycodestyle,
+isort) — real correctness issues over style noise. `ruff format` is available
+locally but not yet a CI gate.
+
+**Type checking** runs mypy over a deliberately small *typed surface* (listed
+under `[tool.mypy]`) that is fully clean today. The intent is to grow that list
+module by module rather than flip the whole pandas/xgboost codebase to strict
+at once — incremental typing that stays green.
+
 Run the full portfolio pipeline:
 
 ```bash

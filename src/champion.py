@@ -12,7 +12,6 @@ import numpy as np
 
 from .significance import PairedComparison, paired_bootstrap
 
-
 WEIGHTS = {
     "mae": 0.35,
     "crps": 0.30,

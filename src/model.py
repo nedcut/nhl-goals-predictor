@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Tuple
 
 import joblib
 import matplotlib.pyplot as plt
@@ -44,6 +44,11 @@ from sklearn.preprocessing import StandardScaler
 from .config import config
 from .logging_config import get_logger
 from .validation import validate_features, validate_target
+
+if TYPE_CHECKING:
+    # Imported only for type annotations; the runtime import is local to
+    # load_artifact() to avoid a circular import with artifacts.py.
+    from .artifacts import ModelArtifact
 
 logger = get_logger(__name__)
 

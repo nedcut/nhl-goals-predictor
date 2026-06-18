@@ -51,7 +51,8 @@ def split_conformal_interval(
     try:
         q = float(np.quantile(scores, q_level, method="higher"))
     except TypeError:  # numpy<1.22
-        q = float(np.quantile(scores, q_level, interpolation="higher"))
+        # Legacy keyword removed in modern numpy; current stubs don't type it.
+        q = float(np.quantile(scores, q_level, interpolation="higher"))  # type: ignore[call-overload]
 
     lo = yhat - q
     hi = yhat + q

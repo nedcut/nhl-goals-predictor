@@ -14,7 +14,7 @@ The estimator is a paired bootstrap over games rather than a t-test over folds:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Dict
 
 import numpy as np

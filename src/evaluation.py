@@ -15,7 +15,7 @@ from typing import Any, Literal, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, root_mean_squared_error
+from sklearn.metrics import root_mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 

@@ -1,0 +1,72 @@
+# Tooling configuration for the NHL goals predictor.
+#
+# This project is run from source (see requirements*.txt) rather than installed
+# as a wheel, so there is intentionally no [build-system]/[project] table here —
+# pyproject.toml is used purely to centralize linter / type-checker / coverage
+# configuration that CI and local development share.
+
+# ---------------------------------------------------------------------------
+# Ruff: linting (and formatting available locally via `ruff format`).
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "data", "models", "reports", "notebooks"]
+
+[tool.ruff.lint]
+# A focused, high-signal ruleset: real correctness issues with near-zero false
+# positives, not style noise.
+#   F  pyflakes     - undefined names, unused imports/vars
+#   E,W pycodestyle - syntax-adjacent errors
+#   I  isort        - import ordering
+# (flake8-bugbear `B` was evaluated but excluded for now: B008 fights FastAPI's
+# idiomatic Query() defaults and several B rules are stylistic — a good future
+# addition once the codebase opts into raise-from / zip-strict conventions.)
+select = ["F", "E", "W", "I"]
+# E501 (line length) is left to the formatter rather than failing lint.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# api.py intentionally calls setup_logging() before importing heavy modules so
+# startup logs are captured, which trips E402 (import not at top of file).
+"src/api.py" = ["E402"]
+# Tests favor local imports inside test bodies and reuse fixtures by name.
+"tests/*" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+# ---------------------------------------------------------------------------
+# mypy: type checking. Scoped to a "typed surface" that is fully clean today;
+# the files list is meant to grow as more modules gain annotations.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true   # pandas/xgboost/etc. ship partial or no stubs
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+files = [
+    "src/config.py",
+    "src/significance.py",
+    "src/conformal.py",
+    "src/logging_config.py",
+    "src/validation.py",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage: measured in CI over the src package.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
