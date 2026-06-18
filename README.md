@@ -73,6 +73,11 @@ Run the full portfolio pipeline:
 python -m src.portfolio --seasons 20222023 20232024 20242025 --tune-trials 150
 ```
 
+> **Runtime note:** the `weighted_prob` objective runs a full time-series CV
+> per Optuna trial, so 150 trials can take a long time. Use a smaller value
+> (e.g. `--tune-trials 40`) for quick iteration and reserve the full count for
+> final runs. Add `--no-xg` if the MoneyPuck xG feed is unavailable.
+
 ## Prediction CLI
 
 Make predictions for upcoming games:

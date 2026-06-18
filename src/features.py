@@ -503,25 +503,25 @@ def _compute_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     # Weekend indicator (Saturday=5, Sunday=6)
     df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
 
-    # Days into season (from Oct 1 of season year)
-    def days_into_season(row):
-        game_date = row["date"]
-        # Determine season start year (games before July belong to previous year's season)
-        if game_date.month >= config.features.season_start_month:
-            season_start = datetime(
-                game_date.year,
-                config.features.season_start_month,
-                config.features.season_start_day
-            )
-        else:
-            season_start = datetime(
-                game_date.year - 1,
-                config.features.season_start_month,
-                config.features.season_start_day
-            )
-        return (game_date - season_start).days
-
-    df["days_into_season"] = df.apply(days_into_season, axis=1)
+    # Days into season (from the season start month/day of the appropriate season year).
+    # Vectorized: games on/after the season start month belong to the current calendar
+    # year, earlier games belong to the previous calendar year.
+    season_start_month = config.features.season_start_month
+    season_start_day = config.features.season_start_day
+    game_dates = df["date"]
+    season_start_year = np.where(
+        game_dates.dt.month >= season_start_month,
+        game_dates.dt.year,
+        game_dates.dt.year - 1,
+    )
+    season_start = pd.to_datetime(
+        {
+            "year": season_start_year,
+            "month": season_start_month,
+            "day": season_start_day,
+        }
+    )
+    df["days_into_season"] = (game_dates - season_start.values).dt.days
 
     # Normalized season progress (0 = start, 1 = end of regular season ~180 days)
     df["season_progress"] = (df["days_into_season"] / 180).clip(0, 1)
