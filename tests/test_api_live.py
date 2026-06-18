@@ -167,3 +167,39 @@ def test_health_requires_model_and_historical_data(monkeypatch):
     assert health.status == "degraded"
     assert health.model_loaded is True
     assert health.historical_data_loaded is False
+
+
+def test_monitoring_summary_reports_empty_log(monkeypatch, tmp_path):
+    # Point the log at an empty temp path so we get the "nothing logged" branch.
+    monkeypatch.setattr(api.config.monitoring, "log_path", tmp_path / "preds.jsonl")
+    resp = asyncio.run(api.get_monitoring_summary())
+    assert resp["n_logged"] == 0
+    assert "message" in resp
+
+
+def test_monitoring_summary_reconciles_logged_predictions(monkeypatch, tmp_path):
+    log_path = tmp_path / "preds.jsonl"
+    monkeypatch.setattr(api.config.monitoring, "log_path", log_path)
+    # Seed the log with two predictions for already-played games.
+    api.log_predictions(
+        pd.DataFrame(
+            {
+                "gamePk": [1, 2],
+                "predicted_total_goals": [6.0, 5.0],
+                "logged_at": ["2025-01-01T00:00", "2025-01-02T00:00"],
+            }
+        ),
+        path=log_path,
+    )
+    monkeypatch.setattr(
+        api,
+        "_historical_df",
+        pd.DataFrame({"gamePk": [1, 2], "totalGoals": [5, 6]}),
+    )
+
+    resp = asyncio.run(api.get_monitoring_summary())
+
+    assert resp["n_logged"] == 2
+    assert resp["n_reconciled"] == 2
+    assert resp["realized"]["n"] == 2
+    assert resp["realized"]["mae"] == 1.0

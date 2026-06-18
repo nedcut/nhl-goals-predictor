@@ -126,6 +126,7 @@ uvicorn src.api:app --reload
 - `GET /dashboard` - Tonight’s slate (simple HTML table)
 - `GET /dashboard/live` - Auto-refreshing live slate (20s cadence)
 - `GET /model/info` - Get model metadata and performance metrics
+- `GET /monitoring/summary` - Realized accuracy + prediction-drift status from logged predictions
 - `GET /health` - Health check
 
 By default, inference loads the previous and active NHL seasons and refreshes
@@ -140,6 +141,40 @@ The live dashboard uses NHL game state (score, period, clock) plus a residual-go
 - `pace_mult = 1 + 0.04 * abs(goal_diff)`
 - `mu_remaining = max(0.05, mu_pregame * remaining_frac * pace_mult)`
 - Remaining goals are modeled with NB2 and shifted by current goals.
+
+## Monitoring & Drift Detection
+
+A live forecaster needs to answer two questions *after* games are played: are we
+still accurate, and has the input distribution shifted? `src/monitoring.py`
+provides both.
+
+Enable prediction logging on the API (off by default so nothing writes
+unexpectedly):
+
+```bash
+NHL_MONITORING_LOG=1 uvicorn src.api:app
+```
+
+Every `/predict` and `/predict/probabilistic` call then appends to an append-only
+JSON Lines log (`data/monitoring/predictions_log.jsonl`). Once games finish, get
+a report of realized accuracy and prediction drift:
+
+```bash
+# Via API
+curl localhost:8000/monitoring/summary
+
+# Or offline, reconciling against cached results
+python -m src.monitoring --seasons 20242025 20252026 --output reports/monitoring.json
+```
+
+The report includes:
+- **Realized accuracy** — rolling MAE / RMSE / bias and over/under Brier on
+  predictions whose games have now been played (the actual field performance,
+  not the CV estimate).
+- **Drift** — **Population Stability Index (PSI)** comparing recent inputs (or
+  predictions) to a reference window. `feature_drift()` scores every feature and
+  `assess_overall_drift()` rolls them into a `stable` / `moderate` / `significant`
+  verdict (any feature at PSI ≥ 0.25, or ≥ 2 features ≥ 0.10).
 
 ## Explainability + Stability
 

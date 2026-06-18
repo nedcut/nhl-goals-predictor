@@ -76,6 +76,7 @@ save_model(result, 'models/xgboost_v1', seasons=['20232024', '20242025'])
 | `significance.py` | Paired-bootstrap model comparison (champion vs runner-up) |
 | `champion.py` | Weighted-objective ranking + significance-annotated reports |
 | `portfolio.py` | End-to-end orchestrator (CV → champion → model card) |
+| `monitoring.py` | Prediction logging, outcome reconciliation, PSI drift detection |
 | `artifacts.py` | Model + metadata persistence |
 | `registry.py` | Model versioning and promotion |
 | `predict.py` | CLI for predictions |

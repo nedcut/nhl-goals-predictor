@@ -37,8 +37,10 @@ except ImportError:
 import pandas as pd
 
 from .artifacts import ModelArtifact
+from .config import config
 from .data import build_dataset, recent_seasons
 from .features import add_features, feature_fill_values, impute_features
+from .monitoring import log_predictions, load_prediction_log, monitoring_summary
 from .predict import (
     _prepare_upcoming_rows,
     fetch_upcoming_games,
@@ -167,6 +169,11 @@ _prob_calibration: Optional[Dict[str, float]] = None
 # evaluated instead of depending on the current request batch.
 _feature_impute: Optional[Dict[str, float]] = None
 
+# Opt-in prediction logging for monitoring. Off by default so the API never
+# writes files unexpectedly (e.g. under test); set NHL_MONITORING_LOG=1 in
+# production to start accumulating a reconciliation trail.
+MONITORING_ENABLED = os.getenv("NHL_MONITORING_LOG", "0") == "1"
+
 # Default configuration
 DEFAULT_MODEL_PATH = Path(os.getenv("NHL_MODEL_PATH", "models/xgboost_v1"))
 DEFAULT_SEASONS = [
@@ -185,6 +192,23 @@ def _finite_or_none(value: float) -> Optional[float]:
 def _impute_features(X: pd.DataFrame) -> pd.DataFrame:
     """Impute missing features using the startup-computed historical fill map."""
     return impute_features(X, _feature_impute)
+
+
+def _maybe_log_predictions(
+    predictions: pd.DataFrame, *, threshold: Optional[float] = None
+) -> None:
+    """Persist served predictions for later drift/accuracy monitoring.
+
+    Best-effort: a monitoring write must never fail a user-facing request, so
+    any error is swallowed with a warning. No-op unless NHL_MONITORING_LOG=1.
+    """
+    if not MONITORING_ENABLED or predictions is None or predictions.empty:
+        return
+    try:
+        model_version = _artifact.metadata.git_commit if _artifact is not None else "unknown"
+        log_predictions(predictions, model_version=model_version or "unknown", threshold=threshold)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to log predictions for monitoring: %s", exc)
 
 
 def _load_startup_state() -> None:
@@ -321,6 +345,8 @@ async def get_predictions(
             count=0,
         )
 
+    _maybe_log_predictions(results)
+
     # Convert to response format
     predictions = [
         GamePrediction(
@@ -418,6 +444,21 @@ async def get_probabilistic_predictions(
                 pmf=pmf[i].tolist(),
             )
         )
+
+    # Log point forecast + P(over) at the primary threshold for monitoring.
+    if MONITORING_ENABLED and preds:
+        primary = 6.5 if 6.5 in thresholds else thresholds[0]
+        log_frame = pd.DataFrame(
+            {
+                "gamePk": up["gamePk"].to_numpy() if "gamePk" in up.columns else [None] * len(preds),
+                "date": [p.date for p in preds],
+                "homeTeam": [p.home_team for p in preds],
+                "awayTeam": [p.away_team for p in preds],
+                "predicted_total_goals": [p.mu for p in preds],
+                "prob_over": [p.over_probs.get(f">{primary:g}") for p in preds],
+            }
+        )
+        _maybe_log_predictions(log_frame, threshold=primary)
 
     return ProbabilisticPredictionResponse(
         predictions=preds,
@@ -636,3 +677,29 @@ async def get_model_summary():
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     return {"summary": _artifact.summary()}
+
+
+@app.get("/monitoring/summary")
+async def get_monitoring_summary():
+    """Realized accuracy and prediction drift from the served-prediction log.
+
+    Reconciles logged predictions against the in-memory historical results and
+    reports rolling MAE / RMSE / Brier plus a PSI-based prediction-drift status.
+    Returns an ``enabled`` flag and a hint when logging has not been turned on.
+    """
+    log_df = load_prediction_log()
+    if log_df.empty:
+        return {
+            "enabled": MONITORING_ENABLED,
+            "n_logged": 0,
+            "message": (
+                "No predictions logged yet. Set NHL_MONITORING_LOG=1 and call "
+                "/predict or /predict/probabilistic to start accumulating a trail."
+            ),
+        }
+
+    results = _historical_df if _historical_df is not None else pd.DataFrame()
+    summary = monitoring_summary(log_df, results)
+    summary["enabled"] = MONITORING_ENABLED
+    summary["log_path"] = str(config.monitoring.log_path)
+    return summary

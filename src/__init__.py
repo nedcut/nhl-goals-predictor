@@ -59,6 +59,15 @@ __all__ = [
     "ValidationError",
     "validate_game_data",
     "validate_features",
+    # Monitoring & drift
+    "log_predictions",
+    "load_prediction_log",
+    "reconcile_outcomes",
+    "realized_metrics",
+    "population_stability_index",
+    "feature_drift",
+    "assess_overall_drift",
+    "monitoring_summary",
 ]
 
 _LAZY_ATTR_MODULES = {
@@ -95,6 +104,14 @@ _LAZY_ATTR_MODULES = {
     "ModelMetadata": ".artifacts",
     "ModelRegistry": ".registry",
     "get_registry": ".registry",
+    "log_predictions": ".monitoring",
+    "load_prediction_log": ".monitoring",
+    "reconcile_outcomes": ".monitoring",
+    "realized_metrics": ".monitoring",
+    "population_stability_index": ".monitoring",
+    "feature_drift": ".monitoring",
+    "assess_overall_drift": ".monitoring",
+    "monitoring_summary": ".monitoring",
 }
 
 

@@ -115,12 +115,36 @@ class ModelConfig:
 
 
 @dataclass
+class MonitoringConfig:
+    """Configuration for prediction logging and drift detection."""
+
+    # Append-only store of served predictions (JSON Lines). Lives under data/
+    # (gitignored) since it is a runtime artifact, not source.
+    log_path: Path = field(
+        default_factory=lambda: Path("data/monitoring/predictions_log.jsonl")
+    )
+
+    # Population Stability Index (PSI) binning + interpretation thresholds.
+    # The 0.1 / 0.25 cutoffs are the conventional credit-scoring rule of thumb.
+    drift_bins: int = 10
+    psi_moderate: float = 0.10  # >= this: moderate shift, worth investigating
+    psi_significant: float = 0.25  # >= this: significant shift, action needed
+
+    # How many of the most recent reconciled games to score for "recent" MAE.
+    recent_window_games: int = 200
+
+    # Over/under thresholds to score with the Brier score during reconciliation.
+    brier_thresholds: Tuple[float, ...] = (5.5, 6.5, 7.5)
+
+
+@dataclass
 class Config:
     """Main configuration container."""
 
     data: DataConfig = field(default_factory=DataConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
 
 
 # Global configuration instance
