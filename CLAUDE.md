@@ -80,6 +80,7 @@ save_model(result, 'models/xgboost_v1', seasons=['20232024', '20242025'])
 | `registry.py` | Model versioning and promotion |
 | `predict.py` | CLI for predictions |
 | `api.py` | FastAPI REST endpoints |
+| `metrics.py` | In-process request metrics registry (counts, latency, counters) |
 | `validation.py` | DataFrame validation utilities |
 
 ### Feature Categories (22 total)

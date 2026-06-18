@@ -131,11 +131,19 @@ uvicorn src.api:app --reload
 - `GET /dashboard` - Tonight’s slate (simple HTML table)
 - `GET /dashboard/live` - Auto-refreshing live slate (20s cadence)
 - `GET /model/info` - Get model metadata and performance metrics
+- `GET /metrics` - In-process request metrics (counts, error rate, latency p50/p95/p99, counters)
 - `GET /health` - Health check
 
 By default, inference loads the previous and active NHL seasons and refreshes
 the active-season cache every six hours. Override runtime paths with
 `NHL_MODEL_PATH` and `NHL_HISTORICAL_SEASONS` (comma-separated).
+
+**Observability:** every request is timed and counted by an in-process metrics
+registry (`src/metrics.py`); responses carry `X-Request-ID` and
+`X-Response-Time-ms` headers, and unhandled errors return a safe JSON envelope
+(`{"error", "request_id"}`) instead of leaking a stack trace. Scrape `GET
+/metrics` for latency percentiles, per-route counts, error rate, and the
+`predictions_served` business counter.
 
 ## Live Dashboard
 
