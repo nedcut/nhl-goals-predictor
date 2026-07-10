@@ -670,6 +670,87 @@ class TestArtifactPersistence:
 
         assert np.allclose(original_pred, loaded_pred, atol=1e-10)
 
+    def test_parse_base_score_scalar_and_vector_formats(self):
+        """base_score parsing must handle pre-3.x scalar and 3.x vector strings."""
+        pytest.importorskip("xgboost")
+        from src.artifacts import _parse_base_score
+
+        assert _parse_base_score("5E-1") == [0.5]
+        assert _parse_base_score("6.2291512E0") == [6.2291512]
+        assert _parse_base_score("[5.839416E0]") == [5.839416]
+
+    def test_xgboost_artifact_saved_in_native_format(self, sample_game_data, temp_model_dir):
+        """XGBoost artifacts should write a .ubj file and prefer it on load."""
+        xgb = pytest.importorskip("xgboost")
+        from src.artifacts import ModelArtifact
+        from src.features import add_features
+        from src.model import prepare_data
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        X_train, X_test, y_train, _, feature_names = prepare_data(df, test_size=0.2)
+        model = xgb.XGBRegressor(n_estimators=5, max_depth=2, random_state=42)
+        model.fit(X_train, y_train)
+
+        from src.model import TrainingResult
+
+        result = TrainingResult(
+            model=model,
+            model_type="XGBoost",
+            feature_names=feature_names,
+            y_test=y_train.iloc[:5],
+            y_pred=model.predict(X_train.iloc[:5]),
+            mae=1.8,
+            rmse=2.3,
+            baseline_mae=1.9,
+        )
+        artifact = ModelArtifact.from_training_result(result)
+        model_path = temp_model_dir / "xgb_model"
+        artifact.save(model_path)
+
+        assert model_path.with_suffix(".ubj").exists()
+
+        # Corrupt the pickle: load must succeed via the native file, with
+        # identical predictions — proving .ubj is authoritative.
+        model_path.with_suffix(".joblib").write_bytes(b"not a pickle")
+        loaded = ModelArtifact.load(model_path)
+        assert np.allclose(loaded.predict(X_test), model.predict(X_test))
+
+    def test_xgboost_artifact_with_lost_intercept_is_rejected(
+        self, sample_game_data, temp_model_dir
+    ):
+        """Loading an XGBoost regressor with an implausible base_score should fail.
+
+        Guards against the pickle-across-versions failure where the learned
+        intercept silently resets to 0.5 and the model predicts ~2 total goals.
+        """
+        xgb = pytest.importorskip("xgboost")
+        from src.artifacts import ModelArtifact, ModelMetadata
+        from src.features import add_features
+        from src.model import prepare_data
+
+        df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
+        X_train, _, y_train, _, feature_names = prepare_data(df, test_size=0.2)
+        # base_score=0.5 reproduces the corrupted-intercept state.
+        model = xgb.XGBRegressor(n_estimators=5, max_depth=2, base_score=0.5, random_state=42)
+        model.fit(X_train, y_train)
+
+        metadata = ModelMetadata(
+            model_type="XGBoost",
+            feature_names=feature_names,
+            mae=1.8,
+            rmse=2.3,
+            baseline_mae=1.9,
+            improvement_pct=5.0,
+            training_date="2026-01-01",
+            n_training_samples=100,
+            n_test_samples=25,
+        )
+        model_path = temp_model_dir / "broken_xgb"
+        ModelArtifact(model=model, metadata=metadata).save(model_path)
+
+        with pytest.raises(ValueError, match="base_score"):
+            ModelArtifact.load(model_path)
+
     def test_artifact_summary(self, sample_game_data):
         """Artifact summary should return readable string."""
         from src.artifacts import ModelArtifact
