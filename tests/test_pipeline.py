@@ -670,6 +670,15 @@ class TestArtifactPersistence:
 
         assert np.allclose(original_pred, loaded_pred, atol=1e-10)
 
+    def test_parse_base_score_scalar_and_vector_formats(self):
+        """base_score parsing must handle pre-3.x scalar and 3.x vector strings."""
+        pytest.importorskip("xgboost")
+        from src.artifacts import _parse_base_score
+
+        assert _parse_base_score("5E-1") == [0.5]
+        assert _parse_base_score("6.2291512E0") == [6.2291512]
+        assert _parse_base_score("[5.839416E0]") == [5.839416]
+
     def test_xgboost_artifact_saved_in_native_format(self, sample_game_data, temp_model_dir):
         """XGBoost artifacts should write a .ubj file and prefer it on load."""
         xgb = pytest.importorskip("xgboost")

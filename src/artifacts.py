@@ -67,6 +67,20 @@ def _is_xgboost_model(model: Any) -> bool:
     return HAS_XGBOOST and isinstance(model, xgb.XGBModel)
 
 
+def _parse_base_score(raw: Any) -> List[float]:
+    """Parse save_config()'s base_score, scalar ("5E-1") or vector ("[5.8E0]").
+
+    XGBoost >= 3 serializes base_score as a JSON list to support multi-target
+    models; earlier versions emit a bare number string.
+    """
+    try:
+        parsed = json.loads(str(raw))
+    except json.JSONDecodeError:
+        parsed = float(str(raw).strip("[]"))
+    values = parsed if isinstance(parsed, list) else [parsed]
+    return [float(v) for v in values]
+
+
 def _check_xgb_base_score(model: Any, path: Path) -> None:
     """Reject XGBoost regressors whose learned intercept is implausible."""
     if not isinstance(model, xgb.XGBRegressor):
@@ -74,14 +88,14 @@ def _check_xgb_base_score(model: Any, path: Path) -> None:
     learner_param = json.loads(model.get_booster().save_config())["learner"][
         "learner_model_param"
     ]
-    base_score = float(learner_param["base_score"])
+    scores = _parse_base_score(learner_param["base_score"])
     lo, hi = _XGB_SANE_BASE_SCORE
-    if not lo <= base_score <= hi:
+    if not scores or not all(lo <= s <= hi for s in scores):
         raise ValueError(
-            f"Model at {path} has base_score={base_score}, outside the plausible "
-            f"total-goals range [{lo}, {hi}]. The intercept was likely lost by "
-            "unpickling across an XGBoost version boundary; retrain and re-save "
-            "the artifact."
+            f"Model at {path} has base_score={learner_param['base_score']}, outside "
+            f"the plausible total-goals range [{lo}, {hi}]. The intercept was likely "
+            "lost by unpickling across an XGBoost version boundary; retrain and "
+            "re-save the artifact."
         )
 
 
