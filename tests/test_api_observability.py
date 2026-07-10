@@ -14,6 +14,10 @@ import src.api as api
 from src.metrics import registry as metrics_registry
 
 
+class _FakeState:
+    pass
+
+
 class _FakeURL:
     def __init__(self, path):
         self.path = path
@@ -23,6 +27,7 @@ class _FakeRequest:
     def __init__(self, path="/predict", method="GET"):
         self.url = _FakeURL(path)
         self.method = method
+        self.state = _FakeState()
 
 
 class _FakeResponse:
@@ -83,4 +88,22 @@ def test_unhandled_exception_handler_returns_safe_envelope():
     assert "Internal server error" in body
     assert "request_id" in body
     # The raw exception message must not leak to the client.
+    assert "kaboom" not in body
+
+
+def test_exception_handler_reuses_middleware_request_id():
+    """Header X-Request-ID and body.request_id must be the same ID."""
+    req = _FakeRequest("/predict", "GET")
+    req.state.request_id = "abc123deadbe"
+
+    async def call_next(request):
+        # Simulate FastAPI: exception handler runs inside call_next and
+        # returns a JSONResponse (middleware then stamps the same ID).
+        return await api.unhandled_exception_handler(request, RuntimeError("kaboom"))
+
+    resp = asyncio.run(api.metrics_middleware(req, call_next))
+    assert resp.status_code == 500
+    assert resp.headers["X-Request-ID"] == "abc123deadbe"
+    body = resp.body.decode("utf-8")
+    assert '"request_id":"abc123deadbe"' in body.replace(" ", "")
     assert "kaboom" not in body

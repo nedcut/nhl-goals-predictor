@@ -278,14 +278,18 @@ async def metrics_middleware(request: Request, call_next):
 
     Kept thin on purpose: all the counting/percentile logic lives in
     src.metrics.MetricsRegistry, which is unit-tested directly.
+
+    The request ID is stored on ``request.state`` so the exception handler
+    can reuse the same ID in the JSON body (header and body must match).
     """
     request_id = uuid.uuid4().hex[:12]
+    request.state.request_id = request_id
     start = time.perf_counter()
     try:
         response = await call_next(request)
     except Exception:
-        # Unhandled error: record as a server error, then let the registered
-        # exception handler (below) format the client response.
+        # Unhandled error that escaped the exception handler: record as a
+        # server error, then re-raise for the ASGI server.
         latency_ms = (time.perf_counter() - start) * 1000.0
         metrics_registry.record_request(_route_label(request), 500, latency_ms)
         raise
@@ -300,7 +304,8 @@ async def metrics_middleware(request: Request, call_next):
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Return a safe JSON envelope for unhandled errors instead of leaking a stack trace."""
-    request_id = uuid.uuid4().hex[:12]
+    # Prefer the middleware-minted ID so X-Request-ID and body.request_id match.
+    request_id = getattr(request.state, "request_id", None) or uuid.uuid4().hex[:12]
     logger.error(
         "Unhandled error [%s] on %s %s: %s",
         request_id, request.method, request.url.path, exc, exc_info=exc,
@@ -308,6 +313,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"error": "Internal server error", "request_id": request_id},
+        headers={"X-Request-ID": request_id},
     )
 
 
@@ -596,6 +602,7 @@ async def get_live_predictions(
             )
         )
 
+    metrics_registry.increment("predictions_served", len(preds))
     return LivePredictionResponse(
         predictions=preds,
         model_type=_artifact.metadata.model_type,
