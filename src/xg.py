@@ -197,7 +197,9 @@ def _standardize_game_level_schema(df: pd.DataFrame, season: str | None = None) 
     )
     # MoneyPuck bulk rows may carry a 4-digit start year; normalize to 8-digit.
     season_values = season_values.map(
-        lambda s: moneypuck_year_to_nhl_season(s) if str(s).isdigit() and len(str(s)) <= 4 else str(s)
+        lambda s: (
+            moneypuck_year_to_nhl_season(s) if str(s).isdigit() and len(str(s)) <= 4 else str(s)
+        )
     )
 
     dates = df[date_col]
@@ -255,7 +257,11 @@ def _standardize_team_game_feed(df: pd.DataFrame) -> pd.DataFrame:
     work["_opp"] = work[opp_col].astype(str).map(normalize_team_name)
     work["_xGF"] = pd.to_numeric(work[xgf_col], errors="coerce")
     work["_side"] = work[side_col].astype(str).str.upper().str.strip()
-    work["_date"] = _parse_moneypuck_date(work[date_col]) if date_col == "gameDate" or pd.api.types.is_numeric_dtype(work[date_col]) else pd.to_datetime(work[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+    work["_date"] = (
+        _parse_moneypuck_date(work[date_col])
+        if date_col == "gameDate" or pd.api.types.is_numeric_dtype(work[date_col])
+        else pd.to_datetime(work[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+    )
 
     if "season" in work.columns:
         work["_season"] = work["season"].map(moneypuck_year_to_nhl_season)
@@ -263,7 +269,9 @@ def _standardize_team_game_feed(df: pd.DataFrame) -> pd.DataFrame:
         # Infer season from date (Oct–Dec → start year, Jan–Jun → start year - 1).
         dt = pd.to_datetime(work["_date"], errors="coerce")
         start_year = dt.dt.year.where(dt.dt.month >= 8, dt.dt.year - 1)
-        work["_season"] = start_year.map(lambda y: moneypuck_year_to_nhl_season(int(y)) if pd.notna(y) else None)
+        work["_season"] = start_year.map(
+            lambda y: moneypuck_year_to_nhl_season(int(y)) if pd.notna(y) else None
+        )
 
     home = work[work["_side"] == "HOME"].copy()
     away = work[work["_side"] == "AWAY"].copy()

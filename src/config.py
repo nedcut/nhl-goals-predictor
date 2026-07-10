@@ -42,9 +42,7 @@ class DataConfig:
     active_season_cache_ttl_hours: int = 6
     # MoneyPuck publishes team game-by-game xG as one bulk CSV (not per-season
     # under /games/{season}/...). See https://moneypuck.com/data.htm.
-    xg_url: str = (
-        "https://moneypuck.com/moneypuck/playerData/careers/gameByGame/all_teams.csv"
-    )
+    xg_url: str = "https://moneypuck.com/moneypuck/playerData/careers/gameByGame/all_teams.csv"
     # Back-compat alias; xg.py reads xg_url. Template form is unused.
     xg_url_template: str = (
         "https://moneypuck.com/moneypuck/playerData/careers/gameByGame/all_teams.csv"

@@ -662,9 +662,7 @@ def add_features(
         # rolling series. require_xg must see real matched values.
         has_xg_signal = has_xg_features and bool(team_log[xg_feature_cols[0]].notna().any())
         if require_xg and not has_xg_signal:
-            raise RuntimeError(
-                "xG features were required but no xG rows matched the game data"
-            )
+            raise RuntimeError("xG features were required but no xG rows matched the game data")
 
     # Base feature columns (from primary window)
     feature_cols = [
