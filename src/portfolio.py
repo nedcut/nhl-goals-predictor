@@ -155,7 +155,7 @@ def _write_model_card(
             "- Track rolling calibration and segment MAE (month/back-to-back/confidence decile).",
             "- Alert when weighted score regresses >2% vs prior champion.",
             "",
-            f"## Build Context",
+            "## Build Context",
             f"- Seasons: {', '.join(seasons)}",
         ]
     )

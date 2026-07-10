@@ -1,0 +1,9 @@
+# Development tooling (linting, type checking, coverage).
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+
+ruff>=0.6,<1.0
+mypy>=1.10,<2.0
+
+# Type stubs for the modules under mypy's typed surface.
+pandas-stubs>=2.0
+types-requests>=2.28

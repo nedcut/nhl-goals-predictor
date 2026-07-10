@@ -12,15 +12,13 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
-import pandas as pd
-
 from .artifacts import ModelArtifact
 from .data import build_dataset
 from .explainability import (
+    feature_stability_matrix,
     plot_stability_heatmap,
     shap_summary_plot_xgb,
     train_xgb_per_season_importance,
-    feature_stability_matrix,
 )
 from .features import add_features, feature_fill_values, impute_features
 from .logging_config import setup_logging

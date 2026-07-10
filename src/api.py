@@ -37,6 +37,7 @@ except ImportError:
 import pandas as pd
 
 from .artifacts import ModelArtifact
+from .conformal import split_conformal_interval
 from .data import build_dataset, recent_seasons
 from .features import add_features, feature_fill_values, impute_features
 from .predict import (
@@ -54,7 +55,6 @@ from .probabilistic import (
     poisson_pmf_matrix,
     prob_over_from_pmf,
 )
-from .conformal import split_conformal_interval
 
 
 # Pydantic models for API responses

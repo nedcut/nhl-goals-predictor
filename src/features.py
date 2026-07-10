@@ -25,7 +25,6 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 import numpy as np

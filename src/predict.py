@@ -21,7 +21,6 @@ import pandas as pd
 
 from .artifacts import ModelArtifact
 from .conformal import split_conformal_interval
-from .config import config
 from .data import build_dataset, fetch_schedule_week, recent_seasons
 from .features import add_features, feature_fill_values, impute_features
 from .live import apply_live_residual_update, fetch_live_states
@@ -154,7 +153,6 @@ def predict_games(
 
     # Get expected features from model in exact order
     expected_features = artifact.metadata.feature_names
-    available_features = [f for f in expected_features if f in upcoming_with_features.columns]
     missing_features = [f for f in expected_features if f not in upcoming_with_features.columns]
 
     if missing_features:

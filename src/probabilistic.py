@@ -13,7 +13,7 @@ The code avoids SciPy to keep dependencies lightweight.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import exp, lgamma, log
+from math import lgamma
 from typing import Iterable, Literal, Tuple
 
 import numpy as np

@@ -11,8 +11,6 @@ Run with:
 
 from __future__ import annotations
 
-import json
-import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List
@@ -30,7 +28,6 @@ from src.validation import (
     validate_seasons,
     validate_target,
 )
-
 
 # =============================================================================
 # FIXTURES - Synthetic Data for Testing
@@ -295,13 +292,8 @@ class TestFeatureEngineering:
 
         df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
 
-        # Check that first few rows have NaN or default values for rolling features
-        # (they don't have enough history)
-        first_game = df.iloc[0]
-
-        # The avg_GF for the first game of a team should be NaN since there's no prior data
-        # (After min_games threshold is applied)
-        # Just verify feature columns exist and have reasonable values
+        # Verify the rolling feature column exists and is not entirely NaN after
+        # the min_games threshold is applied.
         assert not df["home_avg_GF"].isna().all(), "All home_avg_GF values are NaN"
 
     def test_add_features_empty_dataframe(self):
@@ -751,8 +743,9 @@ class TestDataModule:
 
         # Patch load_cached_season to use our temp directory
         def mock_load_cached(season, cache_dir=temp_cache_dir):
-            from src.data import get_cache_path
             import pandas as pd
+
+            from src.data import get_cache_path
             path = get_cache_path(season, temp_cache_dir)
             if path.exists():
                 return pd.read_csv(path)
@@ -928,7 +921,6 @@ class TestEndToEndPipeline:
         from src.artifacts import ModelArtifact
         from src.features import add_features
         from src.model import prepare_data, train_random_forest
-        from src.predict import predict_games
 
         # Step 1: Validate raw data
         validate_game_data(sample_game_data)
@@ -1088,6 +1080,7 @@ class TestLoggingConfig:
     def test_setup_logging_can_raise_log_level_after_initialization(self):
         """setup_logging should reconfigure levels on subsequent calls."""
         import logging
+
         from src.logging_config import setup_logging
 
         logger = setup_logging(level="INFO")
@@ -1216,7 +1209,6 @@ class TestEdgeCases:
 
     def test_very_high_scoring_game(self, sample_game_data, temp_model_dir):
         """Model should handle prediction for high-scoring scenarios."""
-        from src.artifacts import ModelArtifact
         from src.features import add_features
         from src.model import train_random_forest
 
