@@ -188,6 +188,22 @@ def test_retry_after_is_capped_at_max_backoff(monkeypatch):
     assert sleeps == [5.0]
 
 
+
+
+def test_negative_retry_after_is_clamped_to_zero(monkeypatch):
+    """A malicious/broken Retry-After must not raise ValueError in sleep()."""
+    monkeypatch.setattr(http_client.config.data, "max_backoff_seconds", 5.0)
+    session = FakeSession([
+        FakeResponse(429, headers={"Retry-After": "-3"}),
+        FakeResponse(200),
+    ])
+    sleeps, sleep = _no_sleep()
+
+    http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=2)
+
+    assert sleeps == [0.0]
+
+
 def test_backoff_is_bounded_and_grows(monkeypatch):
     """Full-jitter backoff stays within [0, factor * 2**attempt], capped."""
     monkeypatch.setattr(http_client.config.data, "max_backoff_seconds", 100.0)
