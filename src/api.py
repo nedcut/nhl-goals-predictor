@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import math
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -25,8 +27,8 @@ setup_logging(level="INFO")
 logger = get_logger(__name__)
 
 try:
-    from fastapi import FastAPI, HTTPException, Query
-    from fastapi.responses import HTMLResponse
+    from fastapi import FastAPI, HTTPException, Query, Request
+    from fastapi.responses import HTMLResponse, JSONResponse
     from pydantic import BaseModel
 except ImportError:
     raise ImportError(
@@ -40,6 +42,7 @@ from .artifacts import ModelArtifact
 from .conformal import split_conformal_interval
 from .data import build_dataset, recent_seasons
 from .features import add_features, feature_fill_values, impute_features
+from .metrics import registry as metrics_registry
 from .predict import (
     _prepare_upcoming_rows,
     fetch_upcoming_games,
@@ -264,6 +267,56 @@ app = FastAPI(
 )
 
 
+def _route_label(request: Request) -> str:
+    """Stable, low-cardinality label for a request (path without query string)."""
+    return request.url.path
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    """Time every request, record it, and stamp tracing headers on the response.
+
+    Kept thin on purpose: all the counting/percentile logic lives in
+    src.metrics.MetricsRegistry, which is unit-tested directly.
+
+    The request ID is stored on ``request.state`` so the exception handler
+    can reuse the same ID in the JSON body (header and body must match).
+    """
+    request_id = uuid.uuid4().hex[:12]
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Unhandled error that escaped the exception handler: record as a
+        # server error, then re-raise for the ASGI server.
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        metrics_registry.record_request(_route_label(request), 500, latency_ms)
+        raise
+
+    latency_ms = (time.perf_counter() - start) * 1000.0
+    metrics_registry.record_request(_route_label(request), response.status_code, latency_ms)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Response-Time-ms"] = f"{latency_ms:.1f}"
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return a safe JSON envelope for unhandled errors instead of leaking a stack trace."""
+    # Prefer the middleware-minted ID so X-Request-ID and body.request_id match.
+    request_id = getattr(request.state, "request_id", None) or uuid.uuid4().hex[:12]
+    logger.error(
+        "Unhandled error [%s] on %s %s: %s",
+        request_id, request.method, request.url.path, exc, exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "request_id": request_id},
+        headers={"X-Request-ID": request_id},
+    )
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Check API health and readiness."""
@@ -273,6 +326,13 @@ async def health_check():
         model_loaded=_artifact is not None,
         historical_data_loaded=historical_loaded,
     )
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """In-process request metrics: counts, error rate, latency percentiles, and
+    business counters (e.g. predictions_served)."""
+    return metrics_registry.snapshot()
 
 
 @app.get("/predict", response_model=PredictionResponse)
@@ -331,6 +391,7 @@ async def get_predictions(
         )
         for _, row in results.iterrows()
     ]
+    metrics_registry.increment("predictions_served", len(predictions))
 
     return PredictionResponse(
         predictions=predictions,
@@ -418,6 +479,8 @@ async def get_probabilistic_predictions(
                 pmf=pmf[i].tolist(),
             )
         )
+
+    metrics_registry.increment("predictions_served", len(preds))
 
     return ProbabilisticPredictionResponse(
         predictions=preds,
@@ -539,6 +602,7 @@ async def get_live_predictions(
             )
         )
 
+    metrics_registry.increment("predictions_served", len(preds))
     return LivePredictionResponse(
         predictions=preds,
         model_type=_artifact.metadata.model_type,
