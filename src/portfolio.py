@@ -12,6 +12,7 @@ from typing import Any
 from .analysis import run_ablation_study, write_ablation_report, write_error_analysis
 from .champion import write_champion_reports
 from .data import build_dataset
+from .decision import write_decision_report
 from .evaluation import time_series_cv_forecast
 from .features import add_features
 from .logging_config import setup_logging
@@ -191,6 +192,24 @@ def run_portfolio_pipeline(
         return_diagnostics=True,
     )
     write_error_analysis(diag_result.diagnostics or [], output_dir=reports_dir)
+
+    # Decision/edge lens on the diagnostics CV (same games as error analysis).
+    # Synthetic fair reference only — educational, not a market claim.
+    if diag_result.per_game is not None:
+        write_decision_report(
+            diag_result.per_game["p_over"],
+            diag_result.per_game["y_over"],
+            line=float(threshold),
+            line_prob_over=0.5,
+            output_dir=reports_dir,
+            context={
+                "point_model": "xgb",
+                "dist_model": dist_model,
+                "threshold": threshold,
+                "seasons": seasons,
+                "source": "portfolio_diagnostics_cv",
+            },
+        )
 
     _write_model_card(
         path=Path("MODEL_CARD.md"),

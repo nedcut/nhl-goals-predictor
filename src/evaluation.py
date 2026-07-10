@@ -386,6 +386,9 @@ def time_series_cv_forecast(
         "crps": np.asarray(per_game_crps, dtype=float),
         "dist_nll": np.asarray(per_game_nll, dtype=float),
         "over_brier": np.asarray(per_game_brier, dtype=float),
+        # Over/under probabilities and labels at `threshold` (for decision eval).
+        "p_over": np.asarray(all_over_p, dtype=float),
+        "y_over": np.asarray(all_over_y, dtype=int),
     }
 
     return CVForecastResult(

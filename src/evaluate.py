@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from .data import build_dataset
+from .decision import write_decision_report
 from .evaluation import time_series_cv_forecast
 from .features import add_features
 from .logging_config import setup_logging
@@ -64,6 +65,17 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--max-goals", type=int, default=20)
     parser.add_argument("--include-xg", action="store_true", help="Include MoneyPuck xG features when available")
     parser.add_argument("--diagnostics", action="store_true", help="Save fold-level diagnostics CSV")
+    parser.add_argument(
+        "--decision-eval",
+        action="store_true",
+        help="Write decision/edge evaluation report (synthetic fair line, educational only)",
+    )
+    parser.add_argument(
+        "--line-prob-over",
+        type=float,
+        default=0.5,
+        help="Reference P(OVER) for decision eval (default 0.5 = synthetic fair coin)",
+    )
     parser.add_argument("--outdir", type=Path, default=Path("reports"))
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
@@ -127,7 +139,36 @@ def main(argv: Optional[list[str]] = None) -> None:
         pd.DataFrame(result.diagnostics).to_csv(diag_path, index=False)
         print(f"- {diag_path}")
 
-    print(f"\nSaved:\n- {metrics_path}\n- {plot_path}\n- {pit_path}")
+    saved = [metrics_path, plot_path, pit_path]
+    if args.decision_eval and result.per_game is not None:
+        decision_payload = write_decision_report(
+            result.per_game["p_over"],
+            result.per_game["y_over"],
+            line=float(args.threshold),
+            line_prob_over=float(args.line_prob_over),
+            output_dir=outdir,
+            context={
+                "point_model": result.point_model,
+                "dist_model": result.dist_model,
+                "threshold": result.threshold,
+                "seasons": list(args.seasons),
+            },
+        )
+        decision_json = outdir / "decision_eval.json"
+        decision_md = outdir / "decision_eval.md"
+        saved.extend([decision_json, decision_md])
+        print("\nDecision eval (synthetic fair market; educational only)")
+        print("=" * 60)
+        for me, stats in decision_payload["flat_stake_by_min_edge"].items():
+            print(
+                f"  min_edge={me:>4}: n_bets={int(stats['n_bets']):4d}  "
+                f"ROI={stats['roi']:+.3f}  hit_rate={stats['hit_rate']:.3f}"
+            )
+        print("=" * 60)
+
+    print("\nSaved:")
+    for path in saved:
+        print(f"- {path}")
 
 
 if __name__ == "__main__":
