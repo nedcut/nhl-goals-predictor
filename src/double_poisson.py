@@ -1,5 +1,5 @@
 """
-Double-Poisson attack/defense rate model.
+Double-Poisson home/away scoring-rate model.
 
 Generative rationale
 --------------------
@@ -10,16 +10,23 @@ goals. A natural generative model treats each as Poisson with its own rate:
     awayScore ~ Poisson(λ_away)
     totalGoals = homeScore + awayScore  ⇒  E[totalGoals] = λ_home + λ_away
 
-Each rate depends on the attacking team's offensive strength and the opposing
-team's defensive strength. We capture both via one-hot team identity features
-(homeTeam, awayTeam) and fit two regularized Poisson regressions:
+This module fits two regularized Poisson regressions on team identity
+features (``homeTeam``, ``awayTeam``):
 
     λ_home = E[homeScore | homeTeam, awayTeam]
     λ_away = E[awayScore | homeTeam, awayTeam]
 
+That is *not* a shared Dixon–Coles attack/defense parameterization: home and
+away scoring get separate coefficient vectors, so a team's "attack" when
+playing at home is not constrained to match its away-attack coefficient.
 Regularization (``alpha``) shrinks rare-team effects toward the league mean,
-mirroring the hierarchical-ish shrinkage in :class:`TeamStrengthPoissonModel`,
-but with separate attack/defense rates rather than a single total-goals mean.
+mirroring :class:`TeamStrengthPoissonModel`, but with separate home/away
+rates rather than a single total-goals mean.
+
+Downstream CV currently uses μ = λ_home + λ_away as the point forecast and
+calibrates a total-goals distribution (NB2 / mixture) on that mean — it does
+**not** yet form the total PMF by convolving the two Poissons. That remains
+a natural follow-up.
 
 This is intentionally deployable: only team IDs are required at predict time;
 no engineered rolling features are needed.
