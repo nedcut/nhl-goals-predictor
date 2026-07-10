@@ -12,10 +12,67 @@ from typing import Any
 from .analysis import run_ablation_study, write_ablation_report, write_error_analysis
 from .champion import write_champion_reports
 from .data import build_dataset
-from .evaluation import time_series_cv_forecast
+from .evaluation import CVForecastResult, time_series_cv_forecast
 from .features import add_features
 from .logging_config import setup_logging
 from .model import get_feature_columns, optimize_hyperparameters
+
+# Diagnostic multi-line over/under reporting (not used in champion weighting).
+DEFAULT_CALIBRATION_THRESHOLDS = [5.5, 6.5, 7.5]
+
+
+def _write_threshold_calibration_report(
+    result: CVForecastResult,
+    *,
+    output_dir: Path,
+    thresholds: list[float],
+) -> dict[str, Any]:
+    """Write multi-threshold Brier/log-loss + reliability summary for diagnostics."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    threshold_metrics = result.threshold_metrics or {}
+    reliability_by_threshold = {
+        label: [b.__dict__ for b in bins]
+        for label, bins in (result.reliability_by_threshold or {}).items()
+    }
+    payload: dict[str, Any] = {
+        "point_model": result.point_model,
+        "dist_model": result.dist_model,
+        "primary_threshold": result.threshold,
+        "thresholds": thresholds,
+        "threshold_metrics": threshold_metrics,
+        "reliability_by_threshold": reliability_by_threshold,
+        "primary_metrics": {
+            "over_brier": result.metrics_mean.get("over_brier"),
+            "over_log_loss": result.metrics_mean.get("over_log_loss"),
+        },
+    }
+    json_path = output_dir / "threshold_calibration.json"
+    json_path.write_text(json.dumps(payload, indent=2))
+
+    lines = [
+        "# Threshold Calibration",
+        "",
+        f"Point model: `{result.point_model}` · Dist: `{result.dist_model}` · "
+        f"Primary line: `{result.threshold:g}`",
+        "",
+        "Brier and log-loss for P(total goals > t) across common O/U lines. "
+        "Champion weighting still uses the primary threshold only.",
+        "",
+        "| Threshold | Brier | Log loss |",
+        "|-----------|------:|---------:|",
+    ]
+    for t in thresholds:
+        label = f"{float(t):g}"
+        m = threshold_metrics.get(label, {})
+        brier = m.get("brier")
+        ll = m.get("log_loss")
+        brier_s = f"{brier:.4f}" if brier is not None else "—"
+        ll_s = f"{ll:.4f}" if ll is not None else "—"
+        lines.append(f"| >{label} | {brier_s} | {ll_s} |")
+    lines.append("")
+    md_path = output_dir / "threshold_calibration.md"
+    md_path.write_text("\n".join(lines) + "\n")
+    return payload
 
 
 def _write_model_card(
@@ -181,16 +238,27 @@ def run_portfolio_pipeline(
     )
     write_ablation_report(ablation, output_dir=reports_dir)
 
+    # Diagnostic CV only: multi-threshold calibration is cheap on an already-trained
+    # fold path and is kept off champion CVs so selection stays single-line.
+    calib_thresholds = list(DEFAULT_CALIBRATION_THRESHOLDS)
+    if threshold not in calib_thresholds:
+        calib_thresholds = sorted({*calib_thresholds, threshold})
     diag_result = time_series_cv_forecast(
         eval_df,
         point_model="xgb",
         dist_model=dist_model,  # type: ignore[arg-type]
         threshold=threshold,
+        thresholds=calib_thresholds,
         n_splits=5,
         feature_cols=feature_cols,
         return_diagnostics=True,
     )
     write_error_analysis(diag_result.diagnostics or [], output_dir=reports_dir)
+    threshold_calibration = _write_threshold_calibration_report(
+        diag_result,
+        output_dir=reports_dir,
+        thresholds=calib_thresholds,
+    )
 
     _write_model_card(
         path=Path("MODEL_CARD.md"),
@@ -202,6 +270,7 @@ def run_portfolio_pipeline(
         "champion": champion_payload["champion"],
         "tuned_params": best_params,
         "ablation": ablation,
+        "threshold_calibration": threshold_calibration.get("threshold_metrics", {}),
     }
     summary_path = reports_dir / "portfolio_summary.json"
     summary_path.write_text(json.dumps(payload, indent=2))

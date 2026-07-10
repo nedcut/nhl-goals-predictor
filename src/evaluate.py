@@ -22,6 +22,10 @@ from .features import add_features
 from .logging_config import setup_logging
 
 
+def _threshold_label(threshold: float) -> str:
+    return f"{float(threshold):g}"
+
+
 def _plot_reliability(bins, *, title: str, out_path: Path) -> None:
     xs = [b.p_mean for b in bins]
     ys = [b.frac_pos for b in bins]
@@ -58,7 +62,19 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--seasons", nargs="+", default=["20232024", "20242025"])
     parser.add_argument("--point-model", choices=["xgb", "poisson_glm", "team_strength"], default="xgb")
     parser.add_argument("--dist-model", choices=["poisson", "nb2", "poisson_mixture"], default="nb2")
-    parser.add_argument("--threshold", type=float, default=6.5, help="Over/under threshold (e.g., 6.5)")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=6.5,
+        help="Primary over/under threshold for fold metrics (e.g., 6.5)",
+    )
+    parser.add_argument(
+        "--thresholds",
+        nargs="+",
+        type=float,
+        default=[5.5, 6.5, 7.5],
+        help="Over/under lines to report Brier/log-loss/reliability for",
+    )
     parser.add_argument("--splits", type=int, default=5)
     parser.add_argument("--cal-fraction", type=float, default=0.2)
     parser.add_argument("--max-goals", type=int, default=20)
@@ -78,6 +94,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         point_model=args.point_model,
         dist_model=args.dist_model,
         threshold=args.threshold,
+        thresholds=list(args.thresholds),
         n_splits=args.splits,
         cal_fraction=args.cal_fraction,
         max_goals=args.max_goals,
@@ -89,31 +106,62 @@ def main(argv: Optional[list[str]] = None) -> None:
     print("=" * 60)
     for k, v in metrics.items():
         print(f"{k:>14}: {v:.4f}")
+    if result.threshold_metrics:
+        print("\nOver/under by threshold")
+        print("-" * 60)
+        for label, m in result.threshold_metrics.items():
+            print(f"  >{label:>4}: brier={m['brier']:.4f}  log_loss={m['log_loss']:.4f}")
     print("=" * 60)
 
     # Save metrics + folds
     outdir: Path = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
+    reliability_by_threshold = {
+        label: [b.__dict__ for b in bins]
+        for label, bins in (result.reliability_by_threshold or {}).items()
+    }
     payload = {
         "point_model": result.point_model,
         "dist_model": result.dist_model,
         "threshold": result.threshold,
+        "thresholds": list(args.thresholds),
         "max_goals": result.max_goals,
         "metrics_mean": metrics,
+        "threshold_metrics": result.threshold_metrics or {},
         "folds": [f.__dict__ for f in result.folds],
         "reliability_bins": [b.__dict__ for b in result.reliability_bins],
+        "reliability_by_threshold": reliability_by_threshold,
         "pit_values": result.pit_values,
     }
     metrics_path = outdir / f"cv_{args.point_model}_{args.dist_model}.json"
     metrics_path.write_text(json.dumps(payload, indent=2))
 
-    # Save reliability plot
-    plot_path = outdir / f"reliability_over_{args.threshold:g}_{args.point_model}_{args.dist_model}.png"
-    _plot_reliability(
-        result.reliability_bins,
-        title=f"Reliability: P(total goals > {args.threshold:g})",
-        out_path=plot_path,
-    )
+    # Reliability plot per reported threshold
+    plot_paths: list[Path] = []
+    rel_map = result.reliability_by_threshold or {}
+    for t in args.thresholds:
+        label = _threshold_label(t)
+        bins = rel_map.get(label, result.reliability_bins if t == args.threshold else None)
+        if bins is None:
+            continue
+        plot_path = outdir / f"reliability_over_{label}_{args.point_model}_{args.dist_model}.png"
+        _plot_reliability(
+            bins,
+            title=f"Reliability: P(total goals > {label})",
+            out_path=plot_path,
+        )
+        plot_paths.append(plot_path)
+
+    # Always keep a primary-threshold plot name even if thresholds omitted it
+    primary_label = _threshold_label(args.threshold)
+    primary_plot = outdir / f"reliability_over_{primary_label}_{args.point_model}_{args.dist_model}.png"
+    if primary_plot not in plot_paths:
+        _plot_reliability(
+            result.reliability_bins,
+            title=f"Reliability: P(total goals > {primary_label})",
+            out_path=primary_plot,
+        )
+        plot_paths.append(primary_plot)
 
     pit_path = outdir / f"pit_{args.point_model}_{args.dist_model}.png"
     _plot_pit(
@@ -127,7 +175,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         pd.DataFrame(result.diagnostics).to_csv(diag_path, index=False)
         print(f"- {diag_path}")
 
-    print(f"\nSaved:\n- {metrics_path}\n- {plot_path}\n- {pit_path}")
+    saved_lines = [str(metrics_path), *(str(p) for p in plot_paths), str(pit_path)]
+    print("\nSaved:\n" + "\n".join(f"- {p}" for p in saved_lines))
 
 
 if __name__ == "__main__":
