@@ -1,0 +1,705 @@
+{
+  "release_schema_version": 1,
+  "release_id": "benchmark-v1",
+  "generated_at": "2026-07-10T19:28:10.052641+00:00",
+  "git_commit": "d69c8ec03bd239dd5549c492544d2b9972435df5",
+  "protocol": {
+    "version": "nhl-total-goals-v1",
+    "training_seasons": [
+      "20222023",
+      "20232024",
+      "20242025"
+    ],
+    "holdout_season": "20252026",
+    "game_types": [
+      "R"
+    ],
+    "dist_model": "nb2",
+    "primary_threshold": 6.5,
+    "thresholds": [
+      5.5,
+      6.5,
+      7.5
+    ],
+    "cal_fraction": 0.2,
+    "max_goals": 20,
+    "include_goalies": false,
+    "include_xg": false,
+    "include_multi_window": true,
+    "include_interactions": true,
+    "include_temporal": true,
+    "bootstrap_unit": "iso_week",
+    "multiple_testing": "holm-bonferroni",
+    "notes": [
+      "Primary cohort is regular-season games only.",
+      "The 2025-26 season is untouched by hyperparameter tuning.",
+      "Core-v1 excludes goalie and xG features until their historical coverage is release-grade."
+    ]
+  },
+  "data_quality": {
+    "ready": true,
+    "row_count": 5799,
+    "primary_row_count": 5248,
+    "duplicate_game_ids": 0,
+    "exact_duplicate_rows": 0,
+    "score_mismatches": 0,
+    "invalid_dates": 0,
+    "invalid_game_types": 0,
+    "missing_required": {
+      "gamePk": 0,
+      "season": 0,
+      "gameType": 0,
+      "date": 0,
+      "homeTeam": 0,
+      "awayTeam": 0,
+      "homeScore": 0,
+      "awayScore": 0,
+      "totalGoals": 0
+    },
+    "season_game_type_counts": {
+      "20222023": {
+        "O": 56,
+        "P": 88,
+        "R": 1312
+      },
+      "20232024": {
+        "O": 51,
+        "P": 88,
+        "R": 1312
+      },
+      "20242025": {
+        "O": 42,
+        "P": 86,
+        "R": 1312
+      },
+      "20252026": {
+        "O": 58,
+        "P": 82,
+        "R": 1312
+      }
+    },
+    "date_min": "2022-10-01",
+    "date_max": "2026-06-14",
+    "data_fingerprint": "e6a09face2c5bf823c9c75a35ea19c1ce21dbedbbefab13ac55110cb42101e15",
+    "issues": []
+  },
+  "cohort": {
+    "training_rows": 3407,
+    "holdout_rows": 1281,
+    "feature_count": 79,
+    "feature_names": [
+      "home_avg_GF",
+      "home_avg_GA",
+      "home_avg_total",
+      "home_win_pct",
+      "home_rest_days",
+      "home_is_back_to_back",
+      "home_win_streak",
+      "home_avg_GF_5g",
+      "home_avg_GA_5g",
+      "home_avg_total_5g",
+      "home_win_pct_5g",
+      "home_std_GF_5g",
+      "home_avg_GF_10g",
+      "home_avg_GA_10g",
+      "home_avg_total_10g",
+      "home_win_pct_10g",
+      "home_std_GF_10g",
+      "home_avg_GF_20g",
+      "home_avg_GA_20g",
+      "home_avg_total_20g",
+      "home_win_pct_20g",
+      "home_std_GF_20g",
+      "home_avg_GF_40g",
+      "home_avg_GA_40g",
+      "home_avg_total_40g",
+      "home_win_pct_40g",
+      "home_std_GF_40g",
+      "home_games_played",
+      "away_avg_GF",
+      "away_avg_GA",
+      "away_avg_total",
+      "away_win_pct",
+      "away_rest_days",
+      "away_is_back_to_back",
+      "away_win_streak",
+      "away_avg_GF_5g",
+      "away_avg_GA_5g",
+      "away_avg_total_5g",
+      "away_win_pct_5g",
+      "away_std_GF_5g",
+      "away_avg_GF_10g",
+      "away_avg_GA_10g",
+      "away_avg_total_10g",
+      "away_win_pct_10g",
+      "away_std_GF_10g",
+      "away_avg_GF_20g",
+      "away_avg_GA_20g",
+      "away_avg_total_20g",
+      "away_win_pct_20g",
+      "away_std_GF_20g",
+      "away_avg_GF_40g",
+      "away_avg_GA_40g",
+      "away_avg_total_40g",
+      "away_win_pct_40g",
+      "away_std_GF_40g",
+      "away_games_played",
+      "h2h_avg_goals",
+      "venue_avg_goals",
+      "month",
+      "day_of_week",
+      "is_weekend",
+      "days_into_season",
+      "season_progress",
+      "is_late_season",
+      "is_early_season",
+      "scoring_opportunity",
+      "opponent_threat",
+      "rest_advantage",
+      "rest_advantage_capped",
+      "form_diff",
+      "combined_avg_total",
+      "scoring_opp_5g",
+      "opp_threat_5g",
+      "scoring_opp_10g",
+      "opp_threat_10g",
+      "scoring_opp_20g",
+      "opp_threat_20g",
+      "scoring_opp_40g",
+      "opp_threat_40g"
+    ]
+  },
+  "tuning": {
+    "trials": 40,
+    "best_params": {
+      "max_depth": 2,
+      "learning_rate": 0.001993925257226006,
+      "n_estimators": 294,
+      "reg_alpha": 1.9979631470869934,
+      "reg_lambda": 1.893820385610107,
+      "subsample": 0.8721758392546306,
+      "colsample_bytree": 0.7443249789969697,
+      "min_child_weight": 9
+    }
+  },
+  "models": {
+    "xgb_current": {
+      "point_model": "xgb",
+      "dist_model": "nb2",
+      "metrics": {
+        "mae": 1.8487486400053335,
+        "rmse": 2.3039574436636983,
+        "poisson_nll": 2.250478388369965,
+        "dist_nll": 2.250475915651013,
+        "crps": 1.2885617129746973,
+        "over_brier": 0.25123256600905447,
+        "over_log_loss": 0.6956953541595179,
+        "conformal_q": 3.4101481437683105
+      },
+      "threshold_metrics": {
+        "5.5": {
+          "brier": 0.2443941518235865,
+          "log_loss": 0.681893738621038
+        },
+        "6.5": {
+          "brier": 0.25123256600905447,
+          "log_loss": 0.6956953541595179
+        },
+        "7.5": {
+          "brier": 0.18824916905164832,
+          "log_loss": 0.5643262019481982
+        }
+      },
+      "n_test": 1281,
+      "n_train": 2726,
+      "n_cal": 681
+    },
+    "xgb_tuned": {
+      "point_model": "xgb",
+      "dist_model": "nb2",
+      "metrics": {
+        "mae": 1.8492600294317145,
+        "rmse": 2.3019679512314823,
+        "poisson_nll": 2.249733026161516,
+        "dist_nll": 2.2497305257114806,
+        "crps": 1.2874146173261931,
+        "over_brier": 0.2508391479079566,
+        "over_log_loss": 0.6948784205517894,
+        "conformal_q": 3.3305234909057617
+      },
+      "threshold_metrics": {
+        "5.5": {
+          "brier": 0.2442659381565871,
+          "log_loss": 0.6816277119011201
+        },
+        "6.5": {
+          "brier": 0.2508391479079566,
+          "log_loss": 0.6948784205517894
+        },
+        "7.5": {
+          "brier": 0.18824350311524762,
+          "log_loss": 0.5643548156807273
+        }
+      },
+      "n_test": 1281,
+      "n_train": 2726,
+      "n_cal": 681
+    },
+    "team_strength": {
+      "point_model": "team_strength",
+      "dist_model": "nb2",
+      "metrics": {
+        "mae": 1.8475487930926164,
+        "rmse": 2.298227137853132,
+        "poisson_nll": 2.24834949117235,
+        "dist_nll": 2.2483469259590545,
+        "crps": 1.285459632577896,
+        "over_brier": 0.25034896336174856,
+        "over_log_loss": 0.6938777154883884,
+        "conformal_q": 3.3702780535904022
+      },
+      "threshold_metrics": {
+        "5.5": {
+          "brier": 0.24392336264664588,
+          "log_loss": 0.6809223357960053
+        },
+        "6.5": {
+          "brier": 0.25034896336174856,
+          "log_loss": 0.6938777154883884
+        },
+        "7.5": {
+          "brier": 0.18796400472942754,
+          "log_loss": 0.5636706261877883
+        }
+      },
+      "n_test": 1281,
+      "n_train": 2726,
+      "n_cal": 681
+    },
+    "double_poisson": {
+      "point_model": "double_poisson",
+      "dist_model": "nb2",
+      "metrics": {
+        "mae": 1.8493473116997718,
+        "rmse": 2.3000592499955697,
+        "poisson_nll": 2.2490230199913563,
+        "dist_nll": 2.249020472135922,
+        "crps": 1.286384979736558,
+        "over_brier": 0.2505427122002445,
+        "over_log_loss": 0.6942675741005471,
+        "conformal_q": 3.303582565217937
+      },
+      "threshold_metrics": {
+        "5.5": {
+          "brier": 0.2441728591080127,
+          "log_loss": 0.6814380615327665
+        },
+        "6.5": {
+          "brier": 0.2505427122002445,
+          "log_loss": 0.6942675741005471
+        },
+        "7.5": {
+          "brier": 0.1881763279842158,
+          "log_loss": 0.5642033662793665
+        }
+      },
+      "n_test": 1281,
+      "n_train": 2726,
+      "n_cal": 681
+    },
+    "poisson_glm": {
+      "point_model": "poisson_glm",
+      "dist_model": "nb2",
+      "metrics": {
+        "mae": 1.8559872352156837,
+        "rmse": 2.3191247538256516,
+        "poisson_nll": 2.2563005646154615,
+        "dist_nll": 2.2562981185500584,
+        "crps": 1.297794406293562,
+        "over_brier": 0.25412713917265295,
+        "over_log_loss": 0.7018009496662356,
+        "conformal_q": 3.476398311307962
+      },
+      "threshold_metrics": {
+        "5.5": {
+          "brier": 0.24533569313453565,
+          "log_loss": 0.6838852838148257
+        },
+        "6.5": {
+          "brier": 0.25412713917265295,
+          "log_loss": 0.7018009496662356
+        },
+        "7.5": {
+          "brier": 0.18924713432994714,
+          "log_loss": 0.5666756244013622
+        }
+      },
+      "n_test": 1281,
+      "n_train": 2726,
+      "n_cal": 681
+    }
+  },
+  "selection": {
+    "weights": {
+      "mae": 0.35,
+      "crps": 0.3,
+      "dist_nll": 0.2,
+      "over_brier": 0.15
+    },
+    "context": {
+      "protocol": {
+        "version": "nhl-total-goals-v1",
+        "training_seasons": [
+          "20222023",
+          "20232024",
+          "20242025"
+        ],
+        "holdout_season": "20252026",
+        "game_types": [
+          "R"
+        ],
+        "dist_model": "nb2",
+        "primary_threshold": 6.5,
+        "thresholds": [
+          5.5,
+          6.5,
+          7.5
+        ],
+        "cal_fraction": 0.2,
+        "max_goals": 20,
+        "include_goalies": false,
+        "include_xg": false,
+        "include_multi_window": true,
+        "include_interactions": true,
+        "include_temporal": true,
+        "bootstrap_unit": "iso_week",
+        "multiple_testing": "holm-bonferroni",
+        "notes": [
+          "Primary cohort is regular-season games only.",
+          "The 2025-26 season is untouched by hyperparameter tuning.",
+          "Core-v1 excludes goalie and xG features until their historical coverage is release-grade."
+        ]
+      },
+      "training_rows": 3407,
+      "holdout_rows": 1281,
+      "feature_count": 79,
+      "feature_names": [
+        "home_avg_GF",
+        "home_avg_GA",
+        "home_avg_total",
+        "home_win_pct",
+        "home_rest_days",
+        "home_is_back_to_back",
+        "home_win_streak",
+        "home_avg_GF_5g",
+        "home_avg_GA_5g",
+        "home_avg_total_5g",
+        "home_win_pct_5g",
+        "home_std_GF_5g",
+        "home_avg_GF_10g",
+        "home_avg_GA_10g",
+        "home_avg_total_10g",
+        "home_win_pct_10g",
+        "home_std_GF_10g",
+        "home_avg_GF_20g",
+        "home_avg_GA_20g",
+        "home_avg_total_20g",
+        "home_win_pct_20g",
+        "home_std_GF_20g",
+        "home_avg_GF_40g",
+        "home_avg_GA_40g",
+        "home_avg_total_40g",
+        "home_win_pct_40g",
+        "home_std_GF_40g",
+        "home_games_played",
+        "away_avg_GF",
+        "away_avg_GA",
+        "away_avg_total",
+        "away_win_pct",
+        "away_rest_days",
+        "away_is_back_to_back",
+        "away_win_streak",
+        "away_avg_GF_5g",
+        "away_avg_GA_5g",
+        "away_avg_total_5g",
+        "away_win_pct_5g",
+        "away_std_GF_5g",
+        "away_avg_GF_10g",
+        "away_avg_GA_10g",
+        "away_avg_total_10g",
+        "away_win_pct_10g",
+        "away_std_GF_10g",
+        "away_avg_GF_20g",
+        "away_avg_GA_20g",
+        "away_avg_total_20g",
+        "away_win_pct_20g",
+        "away_std_GF_20g",
+        "away_avg_GF_40g",
+        "away_avg_GA_40g",
+        "away_avg_total_40g",
+        "away_win_pct_40g",
+        "away_std_GF_40g",
+        "away_games_played",
+        "h2h_avg_goals",
+        "venue_avg_goals",
+        "month",
+        "day_of_week",
+        "is_weekend",
+        "days_into_season",
+        "season_progress",
+        "is_late_season",
+        "is_early_season",
+        "scoring_opportunity",
+        "opponent_threat",
+        "rest_advantage",
+        "rest_advantage_capped",
+        "form_diff",
+        "combined_avg_total",
+        "scoring_opp_5g",
+        "opp_threat_5g",
+        "scoring_opp_10g",
+        "opp_threat_10g",
+        "scoring_opp_20g",
+        "opp_threat_20g",
+        "scoring_opp_40g",
+        "opp_threat_40g"
+      ],
+      "tune_trials": 40,
+      "tuned_params": {
+        "max_depth": 2,
+        "learning_rate": 0.001993925257226006,
+        "n_estimators": 294,
+        "reg_alpha": 1.9979631470869934,
+        "reg_lambda": 1.893820385610107,
+        "subsample": 0.8721758392546306,
+        "colsample_bytree": 0.7443249789969697,
+        "min_child_weight": 9
+      },
+      "data_fingerprint": "e6a09face2c5bf823c9c75a35ea19c1ce21dbedbbefab13ac55110cb42101e15"
+    },
+    "candidates": {
+      "xgb_current": {
+        "mae": 1.8487486400053335,
+        "rmse": 2.3039574436636983,
+        "poisson_nll": 2.250478388369965,
+        "dist_nll": 2.250475915651013,
+        "crps": 1.2885617129746973,
+        "over_brier": 0.25123256600905447,
+        "over_log_loss": 0.6956953541595179,
+        "conformal_q": 3.4101481437683105
+      },
+      "xgb_tuned": {
+        "mae": 1.8492600294317145,
+        "rmse": 2.3019679512314823,
+        "poisson_nll": 2.249733026161516,
+        "dist_nll": 2.2497305257114806,
+        "crps": 1.2874146173261931,
+        "over_brier": 0.2508391479079566,
+        "over_log_loss": 0.6948784205517894,
+        "conformal_q": 3.3305234909057617
+      },
+      "team_strength": {
+        "mae": 1.8475487930926164,
+        "rmse": 2.298227137853132,
+        "poisson_nll": 2.24834949117235,
+        "dist_nll": 2.2483469259590545,
+        "crps": 1.285459632577896,
+        "over_brier": 0.25034896336174856,
+        "over_log_loss": 0.6938777154883884,
+        "conformal_q": 3.3702780535904022
+      },
+      "double_poisson": {
+        "mae": 1.8493473116997718,
+        "rmse": 2.3000592499955697,
+        "poisson_nll": 2.2490230199913563,
+        "dist_nll": 2.249020472135922,
+        "crps": 1.286384979736558,
+        "over_brier": 0.2505427122002445,
+        "over_log_loss": 0.6942675741005471,
+        "conformal_q": 3.303582565217937
+      },
+      "poisson_glm": {
+        "mae": 1.8559872352156837,
+        "rmse": 2.3191247538256516,
+        "poisson_nll": 2.2563005646154615,
+        "dist_nll": 2.2562981185500584,
+        "crps": 1.297794406293562,
+        "over_brier": 0.25412713917265295,
+        "over_log_loss": 0.7018009496662356,
+        "conformal_q": 3.476398311307962
+      }
+    },
+    "fold_std": {},
+    "ranking": [
+      {
+        "model": "team_strength",
+        "weighted_score": 0.9999999999999999,
+        "mae": 1.8475487930926164,
+        "crps": 1.285459632577896,
+        "dist_nll": 2.2483469259590545,
+        "over_brier": 0.25034896336174856
+      },
+      {
+        "model": "double_poisson",
+        "weighted_score": 1.0007326708753055,
+        "mae": 1.8493473116997718,
+        "crps": 1.286384979736558,
+        "dist_nll": 2.249020472135922,
+        "over_brier": 0.2505427122002445
+      },
+      {
+        "model": "xgb_tuned",
+        "weighted_score": 1.0011972082513525,
+        "mae": 1.8492600294317145,
+        "crps": 1.2874146173261931,
+        "dist_nll": 2.2497305257114806,
+        "over_brier": 0.2508391479079566
+      },
+      {
+        "model": "xgb_current",
+        "weighted_score": 1.0016700666400944,
+        "mae": 1.8487486400053335,
+        "crps": 1.2885617129746973,
+        "dist_nll": 2.250475915651013,
+        "over_brier": 0.25123256600905447
+      },
+      {
+        "model": "poisson_glm",
+        "weighted_score": 1.0074483020855802,
+        "mae": 1.8559872352156837,
+        "crps": 1.297794406293562,
+        "dist_nll": 2.2562981185500584,
+        "over_brier": 0.25412713917265295
+      }
+    ],
+    "champion": {
+      "model": "team_strength",
+      "weighted_score": 0.9999999999999999,
+      "mae": 1.8475487930926164,
+      "crps": 1.285459632577896,
+      "dist_nll": 2.2483469259590545,
+      "over_brier": 0.25034896336174856
+    },
+    "raw_score_leader": {
+      "model": "team_strength",
+      "weighted_score": 0.9999999999999999,
+      "mae": 1.8475487930926164,
+      "crps": 1.285459632577896,
+      "dist_nll": 2.2483469259590545,
+      "over_brier": 0.25034896336174856
+    },
+    "rationale": "Lowest weighted score (1.0000) vs double_poisson (1.0007); tie-breakers MAE then CRPS. Week-block bootstrap comparisons against every candidate used Holm adjustment; the indistinguishable set was team_strength, double_poisson, xgb_tuned, xgb_current. Preferring the simpler candidate selects `team_strength`.",
+    "selection_policy": "blocked_holm_equivalence_prefer_simpler",
+    "equivalence_set": [
+      "team_strength",
+      "double_poisson",
+      "xgb_tuned",
+      "xgb_current"
+    ],
+    "leader_comparisons": [
+      {
+        "n_games": 1281,
+        "mean_a": 1.0,
+        "mean_b": 1.0007326708753053,
+        "mean_diff": -0.0007326708753054539,
+        "ci_low": -0.0013426683714206132,
+        "ci_high": -7.337179277684486e-05,
+        "p_value": 0.0332,
+        "significant": true,
+        "better_model": "team_strength",
+        "verdict": "team_strength is better with high confidence (mean diff -0.0007, 95% CI [-0.0013, -0.0001], p=0.033).",
+        "n_blocks": 26,
+        "resampling_unit": "block",
+        "candidate": "double_poisson",
+        "p_value_adjusted": 0.0996,
+        "significant_adjusted": false,
+        "alpha": 0.05,
+        "adjustment": "holm-bonferroni"
+      },
+      {
+        "n_games": 1281,
+        "mean_a": 1.0,
+        "mean_b": 1.0011972082513527,
+        "mean_diff": -0.00119720825135258,
+        "ci_low": -0.0032107443137339127,
+        "ci_high": 0.0007741942236129552,
+        "p_value": 0.2348,
+        "significant": false,
+        "better_model": null,
+        "verdict": "team_strength and xgb_tuned are statistically indistinguishable (mean diff -0.0012, 95% CI [-0.0032, +0.0008], p=0.235). Prefer the simpler/cheaper model.",
+        "n_blocks": 26,
+        "resampling_unit": "block",
+        "candidate": "xgb_tuned",
+        "p_value_adjusted": 0.4696,
+        "significant_adjusted": false,
+        "alpha": 0.05,
+        "adjustment": "holm-bonferroni"
+      },
+      {
+        "n_games": 1281,
+        "mean_a": 1.0,
+        "mean_b": 1.0016700666400946,
+        "mean_diff": -0.0016700666400945021,
+        "ci_low": -0.004798236695895091,
+        "ci_high": 0.0016009824544568581,
+        "p_value": 0.3008,
+        "significant": false,
+        "better_model": null,
+        "verdict": "team_strength and xgb_current are statistically indistinguishable (mean diff -0.0017, 95% CI [-0.0048, +0.0016], p=0.301). Prefer the simpler/cheaper model.",
+        "n_blocks": 26,
+        "resampling_unit": "block",
+        "candidate": "xgb_current",
+        "p_value_adjusted": 0.4696,
+        "significant_adjusted": false,
+        "alpha": 0.05,
+        "adjustment": "holm-bonferroni"
+      },
+      {
+        "n_games": 1281,
+        "mean_a": 1.0,
+        "mean_b": 1.00744830208558,
+        "mean_diff": -0.007448302085580103,
+        "ci_low": -0.012782776633110587,
+        "ci_high": -0.0019321429670091082,
+        "p_value": 0.008,
+        "significant": true,
+        "better_model": "team_strength",
+        "verdict": "team_strength is better with high confidence (mean diff -0.0074, 95% CI [-0.0128, -0.0019], p=0.008).",
+        "n_blocks": 26,
+        "resampling_unit": "block",
+        "candidate": "poisson_glm",
+        "p_value_adjusted": 0.032,
+        "significant_adjusted": true,
+        "alpha": 0.05,
+        "adjustment": "holm-bonferroni"
+      }
+    ],
+    "champion_vs_runner_up": {
+      "n_games": 1281,
+      "mean_a": 1.0,
+      "mean_b": 1.0007326708753053,
+      "mean_diff": -0.0007326708753054539,
+      "ci_low": -0.0013426683714206132,
+      "ci_high": -7.337179277684486e-05,
+      "p_value": 0.0332,
+      "significant": true,
+      "better_model": "team_strength",
+      "verdict": "team_strength is better with high confidence (mean diff -0.0007, 95% CI [-0.0013, -0.0001], p=0.033).",
+      "n_blocks": 26,
+      "resampling_unit": "block",
+      "candidate": "double_poisson",
+      "p_value_adjusted": 0.0996,
+      "significant_adjusted": false,
+      "alpha": 0.05,
+      "adjustment": "holm-bonferroni"
+    }
+  },
+  "production_artifact": {
+    "artifact_id": "benchmark-v1-team_strength-e6a09face2c5",
+    "registry_version": "team_strength_v1_20260710_152810",
+    "registry_path": "models/registry.json",
+    "prediction_interface": "game_frame",
+    "feature_schema_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "data_fingerprint": "e6a09face2c5bf823c9c75a35ea19c1ce21dbedbbefab13ac55110cb42101e15"
+  }
+}

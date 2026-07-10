@@ -1,39 +1,56 @@
 # Model Card
 
-## Intended Use
-- NHL total-goals forecasting for analytical/educational use.
-- Supports pregame probabilities and live in-game updates.
+## Intended use
 
-## Data Sources
-- NHL Web API schedule/game data.
-- MoneyPuck historical xG (cached to `data/xg/{season}.csv`).
+- Probabilistic NHL regular-season total-goals forecasting for analytical use.
+- Pregame mean, full discrete PMF, over/under probabilities, and intervals.
+- Not a betting recommendation; decision diagnostics require explicit references.
 
-## Feature Families
-- Rolling team offense/defense trends.
-- Rest/back-to-back and temporal features.
-- Matchup interactions and optional goalie context.
-- Rolling xG features and xG-vs-goals differentials.
+## Authoritative release
 
-## Evaluation Protocol
-- Expanding-window time-series CV (5 folds for final evaluation).
-- Proper scoring rules: MAE, CRPS, distributional NLL, Brier for over 6.5.
+- Release: `benchmark-v1`
+- Protocol: `nhl-total-goals-v1`
+- Champion: `team_strength`
+- Artifact: `benchmark-v1-team_strength-e6a09face2c5`
+- Data fingerprint: `e6a09face2c5bf823c9c75a35ea19c1ce21dbedbbefab13ac55110cb42101e15`
+- Feature-schema hash: `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`
 
-## Champion Formula
-- `score = 0.35*(mae/base_mae) + 0.30*(crps/base_crps) + 0.20*(dist_nll/base_dist_nll) + 0.15*(over_brier/base_brier)`
-- Baseline model for normalization: `team_strength`.
-- Current champion: `xgb_tuned`.
-- Rationale: Lowest weighted score (0.9967) vs xgb_current (0.9978); tie-breakers MAE then CRPS.
-- Champion margin over runner-up is within noise (95% CI [-0.0024, +0.0001], p=0.081); treat the two models as statistically indistinguishable.
+## Evaluation design
 
-## Known Failure Modes
-- Sparse recent form early season.
-- Sudden lineup or goalie changes not visible in historical aggregates.
-- Extreme game states and overtime tails.
+- Training/tuning seasons: 20222023, 20232024, 20242025.
+- Untouched holdout: 20252026.
+- Primary cohort: game types R; preseason and playoffs are excluded.
+- Every candidate is evaluated on one common complete-game cohort.
+- Distribution calibration uses only the final historical calibration slice.
+- Uncertainty uses paired ISO-week block bootstrap with Holm adjustment.
+- The simplest model in the full statistically indistinguishable set is selected.
 
-## Monitoring Plan
-- Re-run CV and champion report weekly.
-- Track rolling calibration and segment MAE (month/back-to-back/confidence decile).
-- Alert when weighted score regresses >2% vs prior champion.
+## Holdout performance
 
-## Build Context
-- Seasons: 20222023, 20232024, 20242025
+| Model | Weighted score | MAE | CRPS | Dist NLL | Brier (>6.5) |
+|---|---:|---:|---:|---:|---:|
+| team_strength | 1.0000 | 1.8475 | 1.2855 | 2.2483 | 0.2503 |
+| double_poisson | 1.0007 | 1.8493 | 1.2864 | 2.2490 | 0.2505 |
+| xgb_tuned | 1.0012 | 1.8493 | 1.2874 | 2.2497 | 0.2508 |
+| xgb_current | 1.0017 | 1.8487 | 1.2886 | 2.2505 | 0.2512 |
+| poisson_glm | 1.0074 | 1.8560 | 1.2978 | 2.2563 | 0.2541 |
+
+## Feature and data scope
+
+- Common feature count: 79.
+- Core-v1 intentionally excludes goalie and xG features until historical coverage and source freshness pass the same release checks.
+- Source scores must satisfy unique game IDs, valid dates/types, and home + away = total consistency.
+
+## Monitoring
+
+- The API loads only a promoted release-grade registry artifact.
+- SQLite monitoring deduplicates by game, artifact, and forecast kind.
+- Realized monitoring includes MAE, RMSE, bias, CRPS, NLL, and mid-PIT diagnostics.
+- Drift is reported only against references saved in the artifact; unavailable feature drift is labeled unavailable.
+
+## Limitations
+
+- The holdout establishes predictive comparison, not causal effects or profit.
+- Week blocking reduces but does not eliminate team/schedule dependence.
+- Lineup and confirmed-goalie information are outside the core-v1 release.
+- A new season requires a new locked release rather than silently updating claims.
