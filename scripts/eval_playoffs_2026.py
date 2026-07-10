@@ -20,22 +20,33 @@ residuals (held out from the playoff test set), then applied to the playoffs.
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 from xgboost import XGBRegressor
 
-from src import build_dataset, add_features
+from src import add_features, build_dataset
 from src.config import config
-from src.team_strength import TeamStrengthPoissonModel, TeamStrengthConfig
-from src.probabilistic import nb2_pmf_matrix, prob_over_from_pmf, crps_from_pmf, fit_nb2_alpha
+from src.probabilistic import crps_from_pmf, fit_nb2_alpha, nb2_pmf_matrix, prob_over_from_pmf
 from src.significance import paired_bootstrap
+from src.team_strength import TeamStrengthConfig, TeamStrengthPoissonModel
 
 SEASONS = ["20212022", "20222023", "20232024", "20242025", "20252026"]
 THRESHOLDS = [4.5, 5.5, 6.5, 7.5]
 BASE_FEATURES = [
-    "home_avg_GF", "home_avg_GA", "home_avg_total", "home_win_pct",
-    "home_rest_days", "home_is_back_to_back", "home_win_streak", "home_games_played",
-    "away_avg_GF", "away_avg_GA", "away_avg_total", "away_win_pct",
-    "away_rest_days", "away_is_back_to_back", "away_win_streak", "away_games_played",
+    "home_avg_GF",
+    "home_avg_GA",
+    "home_avg_total",
+    "home_win_pct",
+    "home_rest_days",
+    "home_is_back_to_back",
+    "home_win_streak",
+    "home_games_played",
+    "away_avg_GF",
+    "away_avg_GA",
+    "away_avg_total",
+    "away_win_pct",
+    "away_rest_days",
+    "away_is_back_to_back",
+    "away_win_streak",
+    "away_games_played",
 ]
 
 
@@ -47,7 +58,7 @@ def point_metrics(y, pred):
     err = pred - y
     return {
         "MAE": float(np.mean(np.abs(err))),
-        "RMSE": float(np.sqrt(np.mean(err ** 2))),
+        "RMSE": float(np.sqrt(np.mean(err**2))),
         "bias": float(np.mean(err)),
         "r": float(np.corrcoef(pred, y)[0, 1]),
     }
@@ -65,8 +76,12 @@ def prob_block(name, mu_test, y_test, alpha):
 def main():
     raw = build_dataset(SEASONS)
     feat = add_features(
-        raw, include_goalies=False, include_xg=False,
-        include_multi_window=False, include_interactions=False, include_temporal=False,
+        raw,
+        include_goalies=False,
+        include_xg=False,
+        include_multi_window=False,
+        include_interactions=False,
+        include_temporal=False,
     )
     feat = feat.dropna(subset=BASE_FEATURES + ["totalGoals"]).copy()
 
@@ -78,9 +93,11 @@ def main():
 
     print(f"Cutoff (first playoff game): {cutoff}")
     print(f"TRAIN games: {len(train)}  |  TEST (2026 playoffs): {len(test)}")
-    print(f"Playoff actual total goals: mean={test['totalGoals'].mean():.3f} "
-          f"std={test['totalGoals'].std():.3f}  "
-          f"(train mean={train['totalGoals'].mean():.3f})")
+    print(
+        f"Playoff actual total goals: mean={test['totalGoals'].mean():.3f} "
+        f"std={test['totalGoals'].std():.3f}  "
+        f"(train mean={train['totalGoals'].mean():.3f})"
+    )
 
     y_train = train["totalGoals"].to_numpy(float)
     y_test = test["totalGoals"].to_numpy(float)
@@ -110,13 +127,15 @@ def main():
     print(f"{'model':<16}{'MAE':>8}{'RMSE':>8}{'bias':>8}{'r':>8}{'mean_pred':>11}")
     for name, (mu, _) in models.items():
         m = point_metrics(y_test, mu)
-        print(f"{name:<16}{m['MAE']:>8.3f}{m['RMSE']:>8.3f}{m['bias']:>8.3f}"
-              f"{m['r']:>8.3f}{mu.mean():>11.3f}")
+        print(
+            f"{name:<16}{m['MAE']:>8.3f}{m['RMSE']:>8.3f}{m['bias']:>8.3f}"
+            f"{m['r']:>8.3f}{mu.mean():>11.3f}"
+        )
 
     print("\n=== PROBABILISTIC (NB2) — 2026 PLAYOFFS ===")
     hdr = f"{'model':<16}{'alpha':>7}{'CRPS':>8}"
     for t in THRESHOLDS:
-        hdr += f"{'Br>'+str(t):>9}"
+        hdr += f"{'Br>' + str(t):>9}"
     print(hdr)
     for name, (mu, alpha) in models.items():
         crps, briers = prob_block(name, mu, y_test, alpha)
@@ -132,11 +151,12 @@ def main():
     print("\n=== SIGNIFICANCE: per-game |error| vs mean_baseline (paired bootstrap) ===")
     ae = {n: np.abs(mu - y_test) for n, (mu, _) in models.items()}
     for name in ("xgb_tuned", "team_strength"):
-        cmp = paired_bootstrap(ae[name], ae["mean_baseline"],
-                               name_a=name, name_b="mean_baseline")
-        print(f"  {name} vs mean_baseline: mean_diff={cmp.mean_diff:+.4f} "
-              f"95% CI=[{cmp.ci_low:+.4f}, {cmp.ci_high:+.4f}] "
-              f"p={cmp.p_value:.3f} -> {cmp.verdict}")
+        cmp = paired_bootstrap(ae[name], ae["mean_baseline"], name_a=name, name_b="mean_baseline")
+        print(
+            f"  {name} vs mean_baseline: mean_diff={cmp.mean_diff:+.4f} "
+            f"95% CI=[{cmp.ci_low:+.4f}, {cmp.ci_high:+.4f}] "
+            f"p={cmp.p_value:.3f} -> {cmp.verdict}"
+        )
 
 
 if __name__ == "__main__":
