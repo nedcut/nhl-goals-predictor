@@ -21,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .config import config
 from .conformal import split_conformal_interval
+from .double_poisson import DoublePoissonModel
 from .model import get_feature_columns
 from .probabilistic import (
     crps_per_game_from_pmf,
@@ -34,7 +35,6 @@ from .probabilistic import (
     randomized_pit,
     reliability_curve,
 )
-from .double_poisson import DoublePoissonModel
 from .team_strength import TeamStrengthPoissonModel
 
 PointModel = Literal["xgb", "poisson_glm", "team_strength", "double_poisson"]

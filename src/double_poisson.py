@@ -44,7 +44,6 @@ from sklearn.linear_model import PoissonRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
-
 _TEAM_FEATURES = ["homeTeam", "awayTeam"]
 _REQUIRED_FIT = {"homeTeam", "awayTeam", "homeScore", "awayScore"}
 
