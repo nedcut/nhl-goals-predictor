@@ -93,17 +93,19 @@ def test_unhandled_exception_handler_returns_safe_envelope():
 
 def test_exception_handler_reuses_middleware_request_id():
     """Header X-Request-ID and body.request_id must be the same ID."""
-    req = _FakeRequest("/predict", "GET")
-    req.state.request_id = "abc123deadbe"
+    captured = {}
 
     async def call_next(request):
         # Simulate FastAPI: exception handler runs inside call_next and
         # returns a JSONResponse (middleware then stamps the same ID).
+        captured["id"] = request.state.request_id
         return await api.unhandled_exception_handler(request, RuntimeError("kaboom"))
 
-    resp = asyncio.run(api.metrics_middleware(req, call_next))
+    resp = asyncio.run(api.metrics_middleware(_FakeRequest("/predict"), call_next))
     assert resp.status_code == 500
-    assert resp.headers["X-Request-ID"] == "abc123deadbe"
+    rid = captured["id"]
+    assert rid
+    assert resp.headers["X-Request-ID"] == rid
     body = resp.body.decode("utf-8")
-    assert '"request_id":"abc123deadbe"' in body.replace(" ", "")
+    assert f'"request_id":"{rid}"' in body.replace(" ", "")
     assert "kaboom" not in body
