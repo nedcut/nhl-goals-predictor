@@ -361,7 +361,7 @@ def _add_xg_rolling_features(
     xg_windows: Tuple[int, ...],
 ) -> pd.DataFrame:
     """Join team-level xG rows and compute no-leakage rolling xG features."""
-    from .xg import build_xg_team_log
+    from .xg import build_xg_team_log, normalize_team_name
 
     team_log = team_log.copy()
     xg_log = build_xg_team_log(seasons, use_cache=True)
@@ -371,15 +371,30 @@ def _add_xg_rolling_features(
     xg_log = xg_log.copy()
     xg_log["season"] = xg_log["season"].astype(str)
     xg_log["date"] = pd.to_datetime(xg_log["date"]).dt.strftime("%Y-%m-%d")
+    # Normalize both sides so NHL API quirks (Montréal accent, Utah renames)
+    # still join to MoneyPuck abbreviations.
+    xg_log["_team_key"] = xg_log["team"].map(normalize_team_name)
+    xg_log["_opp_key"] = xg_log["opponent"].map(normalize_team_name)
 
     team_log["season"] = team_log["season"].astype(str)
     team_log["date"] = pd.to_datetime(team_log["date"]).dt.strftime("%Y-%m-%d")
+    team_log["_team_key"] = team_log["team"].map(normalize_team_name)
+    team_log["_opp_key"] = team_log["opponent"].map(normalize_team_name)
 
+    n_before = len(team_log)
     team_log = team_log.merge(
-        xg_log,
-        on=["season", "date", "team", "opponent"],
+        xg_log[["season", "date", "_team_key", "_opp_key", "xGF", "xGA"]],
+        on=["season", "date", "_team_key", "_opp_key"],
         how="left",
     )
+    matched = int(team_log["xGF"].notna().sum())
+    logger.info(
+        "xG join: %d / %d team-game rows matched MoneyPuck xG (%.1f%%)",
+        matched,
+        n_before,
+        100.0 * matched / n_before if n_before else 0.0,
+    )
+    team_log = team_log.drop(columns=["_team_key", "_opp_key"])
 
     grouped = team_log.groupby("team")
     for w in xg_windows:
@@ -641,9 +656,15 @@ def add_features(
                 raise RuntimeError("xG features were required but could not be loaded") from e
             logger.warning("Could not add xG features; proceeding without xG columns: %s", e)
 
-        has_xg_features = any(c.startswith("avg_xGF_") for c in team_log.columns)
-        if require_xg and not has_xg_features:
-            raise RuntimeError("xG features were required but no xG rows matched the game data")
+        xg_feature_cols = [c for c in team_log.columns if c.startswith("avg_xGF_")]
+        has_xg_features = bool(xg_feature_cols)
+        # Columns alone are not enough: a failed join still creates all-NaN
+        # rolling series. require_xg must see real matched values.
+        has_xg_signal = has_xg_features and bool(team_log[xg_feature_cols[0]].notna().any())
+        if require_xg and not has_xg_signal:
+            raise RuntimeError(
+                "xG features were required but no xG rows matched the game data"
+            )
 
     # Base feature columns (from primary window)
     feature_cols = [

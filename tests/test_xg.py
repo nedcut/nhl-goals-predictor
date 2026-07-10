@@ -14,6 +14,40 @@ def test_team_normalization_map_handles_st_louis():
     assert normalize_team_name("St Louis Blues") == "St. Louis Blues"
 
 
+def test_team_normalization_maps_abbrevs_and_montreal_accent():
+    assert normalize_team_name("MTL") == "Montréal Canadiens"
+    assert normalize_team_name("Montréal Canadiens") == "Montréal Canadiens"
+    assert normalize_team_name("L.A") == "Los Angeles Kings"
+    assert normalize_team_name("Utah Mammoth") == "Utah Hockey Club"
+    assert normalize_team_name("Utah Utah Hockey Club") == "Utah Hockey Club"
+
+
+def test_standardize_moneypuck_team_game_feed():
+    """MoneyPuck all_teams.csv is team-game rows, not home/away game rows."""
+    from src.xg import _standardize_xg_schema
+
+    raw = pd.DataFrame(
+        {
+            "team": ["BOS", "TOR", "BOS", "TOR"],
+            "season": [2023, 2023, 2023, 2023],
+            "gameId": [1, 1, 2, 2],
+            "opposingTeam": ["TOR", "BOS", "TOR", "BOS"],
+            "home_or_away": ["HOME", "AWAY", "HOME", "AWAY"],
+            "gameDate": [20231010, 20231010, 20231012, 20231012],
+            "situation": ["all", "all", "5on5", "5on5"],
+            "xGoalsFor": [3.1, 2.4, 9.9, 9.9],
+        }
+    )
+    out = _standardize_xg_schema(raw)
+    assert len(out) == 1  # only situation==all game
+    assert out.iloc[0]["season"] == "20232024"
+    assert out.iloc[0]["homeTeam"] == "Boston Bruins"
+    assert out.iloc[0]["awayTeam"] == "Toronto Maple Leafs"
+    assert out.iloc[0]["home_xG"] == 3.1
+    assert out.iloc[0]["away_xG"] == 2.4
+    assert out.iloc[0]["date"] == "2023-10-10"
+
+
 def test_xg_cache_and_schema_parse(tmp_path: Path):
     cache_dir = tmp_path / "xg"
     cache_dir.mkdir(parents=True, exist_ok=True)
