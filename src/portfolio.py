@@ -26,20 +26,35 @@ def _write_model_card(
 ) -> None:
     winner = champion_payload["champion"]["model"]
     rationale = champion_payload["rationale"]
+    raw_leader = champion_payload.get("raw_score_leader") or champion_payload["champion"]
+    raw_leader_name = raw_leader["model"] if isinstance(raw_leader, dict) else str(raw_leader)
+    policy = champion_payload.get("selection_policy", "significance_prefer_simpler")
     sig = champion_payload.get("champion_vs_runner_up")
     if sig is None:
-        sig_line = "- Champion-vs-runner-up significance: not computed."
+        sig_line = (
+            "- Score-leader vs runner-up significance: not computed "
+            "(champion is the weighted-score leader)."
+        )
     elif sig["significant"]:
         sig_line = (
-            f"- Champion beats runner-up with statistical significance "
-            f"(95% CI [{sig['ci_low']:+.4f}, {sig['ci_high']:+.4f}], p={sig['p_value']:.3f})."
+            f"- Score leader (`{raw_leader_name}`) beats runner-up with statistical "
+            f"significance (95% CI [{sig['ci_low']:+.4f}, {sig['ci_high']:+.4f}], "
+            f"p={sig['p_value']:.3f}); champion remains the score leader."
         )
     else:
-        sig_line = (
-            f"- Champion margin over runner-up is within noise "
-            f"(95% CI [{sig['ci_low']:+.4f}, {sig['ci_high']:+.4f}], p={sig['p_value']:.3f}); "
-            "treat the two models as statistically indistinguishable."
-        )
+        demoted = winner != raw_leader_name
+        if demoted:
+            sig_line = (
+                f"- Score leader (`{raw_leader_name}`) margin over runner-up is within noise "
+                f"(95% CI [{sig['ci_low']:+.4f}, {sig['ci_high']:+.4f}], p={sig['p_value']:.3f}); "
+                f"champion demoted to simpler model `{winner}`."
+            )
+        else:
+            sig_line = (
+                f"- Score leader margin over runner-up is within noise "
+                f"(95% CI [{sig['ci_low']:+.4f}, {sig['ci_high']:+.4f}], p={sig['p_value']:.3f}); "
+                f"keeping simpler/equal-complexity model `{winner}`."
+            )
     content = "\n".join(
         [
             "# Model Card",
@@ -65,7 +80,11 @@ def _write_model_card(
             "## Champion Formula",
             "- `score = 0.35*(mae/base_mae) + 0.30*(crps/base_crps) + 0.20*(dist_nll/base_dist_nll) + 0.15*(over_brier/base_brier)`",
             "- Baseline model for normalization: `team_strength`.",
+            f"- Selection policy: `{policy}` — rank by weighted score; if the "
+            "score-leader vs runner-up paired bootstrap is not significant, "
+            "prefer the simpler/cheaper model as champion.",
             f"- Current champion: `{winner}`.",
+            f"- Weighted-score leader: `{raw_leader_name}`.",
             f"- Rationale: {rationale}",
             sig_line,
             "",
