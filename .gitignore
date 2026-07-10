@@ -18,8 +18,9 @@ htmlcov/
 # Data files (cached from API)
 data/
 
-# Trained models
-models/
+# Trained models (binary/runtime state remains local; keep operator docs)
+models/*
+!models/README.md
 
 # Generated images
 *.png
@@ -30,4 +31,6 @@ models/
 
 # Local environments and generated reports
 .venv/
-reports/
+reports/*
+!reports/releases/
+!reports/releases/**

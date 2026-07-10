@@ -52,16 +52,18 @@ def sample_game_data(sample_teams) -> pd.DataFrame:
         home_score = np.random.poisson(3)
         away_score = np.random.poisson(3)
 
-        games.append({
-            "gamePk": 2024020000 + i,
-            "season": "20242025",
-            "date": dates[i].strftime("%Y-%m-%d"),
-            "homeTeam": sample_teams[home_idx],
-            "awayTeam": sample_teams[away_idx],
-            "homeScore": home_score,
-            "awayScore": away_score,
-            "totalGoals": home_score + away_score,
-        })
+        games.append(
+            {
+                "gamePk": 2024020000 + i,
+                "season": "20242025",
+                "date": dates[i].strftime("%Y-%m-%d"),
+                "homeTeam": sample_teams[home_idx],
+                "awayTeam": sample_teams[away_idx],
+                "homeScore": home_score,
+                "awayScore": away_score,
+                "totalGoals": home_score + away_score,
+            }
+        )
 
     return pd.DataFrame(games)
 
@@ -85,16 +87,18 @@ def small_game_data(sample_teams) -> pd.DataFrame:
         home_score = np.random.poisson(3)
         away_score = np.random.poisson(3)
 
-        games.append({
-            "gamePk": 2024020000 + i,
-            "season": "20242025",
-            "date": dates[i].strftime("%Y-%m-%d"),
-            "homeTeam": sample_teams[home_idx],
-            "awayTeam": sample_teams[away_idx],
-            "homeScore": home_score,
-            "awayScore": away_score,
-            "totalGoals": home_score + away_score,
-        })
+        games.append(
+            {
+                "gamePk": 2024020000 + i,
+                "season": "20242025",
+                "date": dates[i].strftime("%Y-%m-%d"),
+                "homeTeam": sample_teams[home_idx],
+                "awayTeam": sample_teams[away_idx],
+                "homeScore": home_score,
+                "awayScore": away_score,
+                "totalGoals": home_score + away_score,
+            }
+        )
 
     return pd.DataFrame(games)
 
@@ -119,6 +123,7 @@ def temp_model_dir(tmp_path) -> Path:
 def sample_features_df(sample_game_data):
     """Game data with features already added."""
     from src.features import add_features
+
     return add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
 
 

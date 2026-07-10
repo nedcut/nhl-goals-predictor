@@ -20,6 +20,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Tuple
@@ -104,20 +105,45 @@ class ModelConfig:
     random_state: int = 42
 
     # Current champion XGBoost hyperparameters under probabilistic time-series CV.
-    xgb_params: Dict[str, float | int] = field(default_factory=lambda: {
-        "max_depth": 4,
-        "learning_rate": 0.011896873680695898,
-        "n_estimators": 65,
-        "reg_alpha": 1.7530910973690677,
-        "reg_lambda": 2.6740596452335668,
-        "subsample": 0.8393574607886646,
-        "colsample_bytree": 0.5556469177410432,
-        "min_child_weight": 7,
-    })
+    xgb_params: Dict[str, float | int] = field(
+        default_factory=lambda: {
+            "max_depth": 4,
+            "learning_rate": 0.011896873680695898,
+            "n_estimators": 65,
+            "reg_alpha": 1.7530910973690677,
+            "reg_lambda": 2.6740596452335668,
+            "subsample": 0.8393574607886646,
+            "colsample_bytree": 0.5556469177410432,
+            "min_child_weight": 7,
+        }
+    )
 
     # Random Forest defaults
     rf_n_estimators: int = 200
     rf_max_depth: int | None = None
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass
+class MonitoringConfig:
+    """Durable served-prediction ledger and drift configuration."""
+
+    enabled: bool = field(default_factory=lambda: _env_flag("NHL_MONITORING_LOG"))
+    db_path: Path = field(
+        default_factory=lambda: Path(
+            os.getenv("NHL_MONITORING_DB", "data/monitoring/predictions.sqlite3")
+        )
+    )
+    recent_window_games: int = 200
+    drift_bins: int = 10
+    psi_moderate: float = 0.10
+    psi_significant: float = 0.25
 
 
 @dataclass
@@ -127,6 +153,7 @@ class Config:
     data: DataConfig = field(default_factory=DataConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
 
 
 # Global configuration instance

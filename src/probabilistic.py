@@ -68,13 +68,7 @@ def nb2_logpmf(k: np.ndarray, mu: np.ndarray, alpha: float) -> np.ndarray:
     r = 1.0 / alpha
     p = r / (r + mu)  # success probability in NB(r, p)
     # log pmf = lgamma(k+r) - lgamma(r) - lgamma(k+1) + r log p + k log(1-p)
-    return (
-        _lgamma_arr(k + r)
-        - lgamma(r)
-        - _lgamma_arr(k + 1.0)
-        + r * np.log(p)
-        + k * np.log1p(-p)
-    )
+    return _lgamma_arr(k + r) - lgamma(r) - _lgamma_arr(k + 1.0) + r * np.log(p) + k * np.log1p(-p)
 
 
 def poisson_pmf_matrix(mu: np.ndarray | Iterable[float], max_goals: int = 20) -> np.ndarray:
@@ -231,7 +225,9 @@ def fit_poisson_mixture(
     best_nll = float("inf")
     for w in weight_grid:
         for m in multiplier_grid:
-            pmf = poisson_mixture_pmf_matrix(mu, weight=float(w), multiplier=float(m), max_goals=max_goals)
+            pmf = poisson_mixture_pmf_matrix(
+                mu, weight=float(w), multiplier=float(m), max_goals=max_goals
+            )
             # Clip to avoid log(0)
             p_y = np.take_along_axis(pmf, y[:, None].clip(0, max_goals), axis=1).squeeze(1)
             nll = float(-np.mean(np.log(np.clip(p_y, 1e-12, 1.0))))
@@ -263,6 +259,7 @@ def crps_per_game_from_pmf(pmf: np.ndarray, y: np.ndarray | Iterable[int]) -> np
 def crps_from_pmf(pmf: np.ndarray, y: np.ndarray | Iterable[int]) -> float:
     """Mean CRPS for a discrete distribution over {0..K}."""
     return float(np.mean(crps_per_game_from_pmf(pmf, y)))
+
 
 def randomized_pit(
     pmf: np.ndarray,

@@ -259,6 +259,16 @@ def time_series_cv_forecast(
     per_game_crps: list[float] = []
     per_game_nll: list[float] = []
     per_game_brier: list[float] = []
+    per_game_dates: list[str] = []
+    per_game_blocks: list[str] = []
+    per_game_probs: list[float] = []
+    per_game_outcomes: list[int] = []
+    per_game_mu: list[float] = []
+    per_game_actual: list[float] = []
+    per_game_folds: list[int] = []
+    per_game_seasons: list[str] = []
+    per_game_game_types: list[str] = []
+    per_game_reference_probs: list[float] = []
 
     def _rest_bucket(rest_diff: float) -> str:
         if pd.isna(rest_diff):
@@ -313,7 +323,9 @@ def time_series_cv_forecast(
             pmf_test = nb2_pmf_matrix(mu_test, alpha=alpha_hat, max_goals=max_goals)
         elif dist_model == "poisson_mixture":
             w_hat, m_hat = fit_poisson_mixture(y_cal, mu_cal, max_goals=max_goals)
-            pmf_test = poisson_mixture_pmf_matrix(mu_test, weight=w_hat, multiplier=m_hat, max_goals=max_goals)
+            pmf_test = poisson_mixture_pmf_matrix(
+                mu_test, weight=w_hat, multiplier=m_hat, max_goals=max_goals
+            )
         else:
             raise ValueError(f"Unknown dist_model: {dist_model}")
 
@@ -369,6 +381,22 @@ def time_series_cv_forecast(
         per_game_crps.extend(crps_per_game.tolist())
         per_game_nll.extend(nll_per_game.tolist())
         per_game_brier.extend(brier_per_game.tolist())
+        date_values = pd.to_datetime(test_df["date"], errors="raise")
+        per_game_dates.extend(date_values.dt.strftime("%Y-%m-%d").tolist())
+        per_game_blocks.extend(date_values.dt.to_period("W-SUN").astype(str).tolist())
+        per_game_probs.extend(p_over.tolist())
+        per_game_outcomes.extend(y_over.tolist())
+        per_game_mu.extend(mu_test.tolist())
+        per_game_actual.extend(y_test.tolist())
+        per_game_folds.extend([fold] * len(test_df))
+        per_game_seasons.extend(
+            test_df.get("season", pd.Series([""] * len(test_df))).astype(str).tolist()
+        )
+        per_game_game_types.extend(
+            test_df.get("gameType", pd.Series([""] * len(test_df))).astype(str).tolist()
+        )
+        reference_rate = float(np.mean(train_df["totalGoals"].to_numpy(dtype=float) > threshold))
+        per_game_reference_probs.extend([reference_rate] * len(test_df))
 
         # Conformal interval radius based on calibration residuals (split-conformal).
         # Only the quantile radius q feeds the reported metric; bounds are derivable.
@@ -415,7 +443,9 @@ def time_series_cv_forecast(
                             int(row.get("home_is_back_to_back", 0) or 0)
                             or int(row.get("away_is_back_to_back", 0) or 0)
                         ),
-                        "month": int(pd.to_datetime(row.get("date")).month) if row.get("date") else -1,
+                        "month": int(pd.to_datetime(row.get("date")).month)
+                        if row.get("date")
+                        else -1,
                         "rest_diff_bucket": _rest_bucket(
                             float(row.get("home_rest_days", np.nan))
                             - float(row.get("away_rest_days", np.nan))
@@ -447,6 +477,16 @@ def time_series_cv_forecast(
         "crps": np.asarray(per_game_crps, dtype=float),
         "dist_nll": np.asarray(per_game_nll, dtype=float),
         "over_brier": np.asarray(per_game_brier, dtype=float),
+        "date": np.asarray(per_game_dates, dtype=object),
+        "block_key": np.asarray(per_game_blocks, dtype=object),
+        "p_over": np.asarray(per_game_probs, dtype=float),
+        "y_over": np.asarray(per_game_outcomes, dtype=int),
+        "mu": np.asarray(per_game_mu, dtype=float),
+        "actual": np.asarray(per_game_actual, dtype=float),
+        "fold": np.asarray(per_game_folds, dtype=int),
+        "season": np.asarray(per_game_seasons, dtype=object),
+        "game_type": np.asarray(per_game_game_types, dtype=object),
+        "reference_p_over": np.asarray(per_game_reference_probs, dtype=float),
     }
 
     return CVForecastResult(
@@ -458,6 +498,157 @@ def time_series_cv_forecast(
         reliability_bins=bins,
         pit_values=pit_values,
         diagnostics=diagnostics_rows if return_diagnostics else None,
+        per_game=per_game,
+        threshold_metrics=threshold_metrics,
+        reliability_by_threshold=reliability_by_threshold,
+    )
+
+
+def evaluate_holdout_forecast(
+    train_df: pd.DataFrame,
+    holdout_df: pd.DataFrame,
+    *,
+    point_model: PointModel = "xgb",
+    dist_model: DistModel = "nb2",
+    threshold: float = 6.5,
+    thresholds: list[float] | None = None,
+    cal_fraction: float = 0.2,
+    max_goals: int = 20,
+    feature_cols: Optional[list[str]] = None,
+    xgb_params: Optional[dict[str, Any]] = None,
+) -> CVForecastResult:
+    """Fit on historical seasons and score one untouched chronological holdout.
+
+    Hyperparameters must be chosen before calling this function. The final
+    ``cal_fraction`` of the historical frame calibrates the predictive
+    distribution; the earlier rows fit the point model. No holdout outcome is
+    used for fitting, calibration, feature selection, or tuning.
+    """
+    if not (0.05 <= cal_fraction <= 0.5):
+        raise ValueError("cal_fraction must be in [0.05, 0.5]")
+    if train_df.empty or holdout_df.empty:
+        raise ValueError("train_df and holdout_df must both be non-empty")
+
+    train = train_df.sort_values("date").reset_index(drop=True)
+    test = holdout_df.sort_values("date").reset_index(drop=True)
+    if pd.to_datetime(train["date"]).max() >= pd.to_datetime(test["date"]).min():
+        raise ValueError("holdout must start strictly after the training period")
+
+    if point_model not in _TEAM_ID_POINT_MODELS:
+        if feature_cols is None:
+            feature_cols = get_feature_columns(train)
+        if not feature_cols:
+            raise ValueError("No engineered feature columns found; run add_features() first.")
+        required = feature_cols + ["totalGoals"]
+        train = train.dropna(subset=required).reset_index(drop=True)
+        test = test.dropna(subset=required).reset_index(drop=True)
+    if len(train) < 10 or test.empty:
+        raise ValueError("insufficient complete rows for holdout evaluation")
+
+    cal_size = max(1, int(cal_fraction * len(train)))
+    fit = train.iloc[:-cal_size].copy()
+    cal = train.iloc[-cal_size:].copy()
+    model, scaler, used_features = _fit_point_model(
+        fit,
+        point_model=point_model,
+        feature_cols=feature_cols,
+        xgb_params=xgb_params,
+    )
+    mu_cal = _predict_mu(
+        model, cal, point_model=point_model, scaler=scaler, feature_cols=used_features
+    )
+    mu_test = _predict_mu(
+        model, test, point_model=point_model, scaler=scaler, feature_cols=used_features
+    )
+    y_cal = cal["totalGoals"].to_numpy(dtype=float)
+    y_test = test["totalGoals"].to_numpy(dtype=float)
+
+    if dist_model == "poisson":
+        pmf = poisson_pmf_matrix(mu_test, max_goals=max_goals)
+    elif dist_model == "nb2":
+        pmf = nb2_pmf_matrix(mu_test, alpha=fit_nb2_alpha(y_cal, mu_cal), max_goals=max_goals)
+    elif dist_model == "poisson_mixture":
+        weight, multiplier = fit_poisson_mixture(y_cal, mu_cal, max_goals=max_goals)
+        pmf = poisson_mixture_pmf_matrix(
+            mu_test, weight=weight, multiplier=multiplier, max_goals=max_goals
+        )
+    else:
+        raise ValueError(f"Unknown dist_model: {dist_model}")
+
+    y_idx = y_test.astype(int).clip(0, max_goals)
+    p_y = np.take_along_axis(pmf, y_idx[:, None], axis=1).squeeze(1)
+    per_nll = -np.log(np.clip(p_y, 1e-12, 1.0))
+    per_crps = crps_per_game_from_pmf(pmf, y_idx)
+    p_over = prob_over_from_pmf(pmf, threshold=threshold)
+    y_over = (y_test > threshold).astype(int)
+    per_brier = (p_over - y_over) ** 2
+    abs_error = np.abs(y_test - mu_test)
+    _, _, q = split_conformal_interval(y_cal, mu_cal, mu_test, alpha=0.1, clip_lower=0.0)
+    fold = FoldForecastMetrics(
+        fold=1,
+        n_train=len(fit),
+        n_cal=len(cal),
+        n_test=len(test),
+        mae=float(np.mean(abs_error)),
+        rmse=float(root_mean_squared_error(y_test, mu_test)),
+        poisson_nll=poisson_nll(y_test, mu_test),
+        dist_nll=float(np.mean(per_nll)),
+        crps=float(np.mean(per_crps)),
+        over_brier=float(np.mean(per_brier)),
+        over_log_loss=_log_loss(p_over, y_over),
+        conformal_q=float(q),
+    )
+
+    eval_thresholds = list(thresholds) if thresholds is not None else [threshold]
+    threshold_metrics: dict[str, dict[str, float]] = {}
+    reliability_by_threshold: dict[str, list] = {}
+    for value in eval_thresholds:
+        label = _threshold_label(value)
+        probs = prob_over_from_pmf(pmf, threshold=value)
+        outcomes = (y_test > value).astype(int)
+        threshold_metrics[label] = {
+            "brier": _brier_score(probs, outcomes),
+            "log_loss": _log_loss(probs, outcomes),
+        }
+        reliability_by_threshold[label] = reliability_curve(probs, outcomes, n_bins=10)
+
+    dates = pd.to_datetime(test["date"], errors="raise")
+    game_keys = (
+        dates.dt.strftime("%Y-%m-%d")
+        + "|"
+        + test.get("homeTeam", pd.Series([""] * len(test))).astype(str)
+        + "|"
+        + test.get("awayTeam", pd.Series([""] * len(test))).astype(str)
+    ).to_numpy()
+    per_game = {
+        "game_key": game_keys,
+        "abs_error": abs_error,
+        "crps": per_crps,
+        "dist_nll": per_nll,
+        "over_brier": per_brier,
+        "date": dates.dt.strftime("%Y-%m-%d").to_numpy(dtype=object),
+        "block_key": dates.dt.to_period("W-SUN").astype(str).to_numpy(dtype=object),
+        "p_over": p_over,
+        "y_over": y_over,
+        "mu": mu_test,
+        "actual": y_test,
+        "fold": np.ones(len(test), dtype=int),
+        "season": test.get("season", pd.Series([""] * len(test))).astype(str).to_numpy(),
+        "game_type": test.get("gameType", pd.Series([""] * len(test))).astype(str).to_numpy(),
+        "reference_p_over": np.full(
+            len(test),
+            float(np.mean(train["totalGoals"].to_numpy(dtype=float) > threshold)),
+            dtype=float,
+        ),
+    }
+    return CVForecastResult(
+        point_model=point_model,
+        dist_model=dist_model,
+        threshold=threshold,
+        max_goals=max_goals,
+        folds=[fold],
+        reliability_bins=reliability_curve(p_over, y_over, n_bins=10),
+        pit_values=randomized_pit(pmf, y_test.astype(int)).tolist(),
         per_game=per_game,
         threshold_metrics=threshold_metrics,
         reliability_by_threshold=reliability_by_threshold,

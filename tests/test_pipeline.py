@@ -73,16 +73,18 @@ def sample_game_data(sample_teams) -> pd.DataFrame:
         home_score = np.random.poisson(3)  # Average ~3 goals
         away_score = np.random.poisson(3)
 
-        games.append({
-            "gamePk": 2024020000 + i,
-            "season": "20242025",
-            "date": dates[i].strftime("%Y-%m-%d"),
-            "homeTeam": sample_teams[home_idx],
-            "awayTeam": sample_teams[away_idx],
-            "homeScore": home_score,
-            "awayScore": away_score,
-            "totalGoals": home_score + away_score,
-        })
+        games.append(
+            {
+                "gamePk": 2024020000 + i,
+                "season": "20242025",
+                "date": dates[i].strftime("%Y-%m-%d"),
+                "homeTeam": sample_teams[home_idx],
+                "awayTeam": sample_teams[away_idx],
+                "homeScore": home_score,
+                "awayScore": away_score,
+                "totalGoals": home_score + away_score,
+            }
+        )
 
     return pd.DataFrame(games)
 
@@ -106,16 +108,18 @@ def small_game_data(sample_teams) -> pd.DataFrame:
         home_score = np.random.poisson(3)
         away_score = np.random.poisson(3)
 
-        games.append({
-            "gamePk": 2024020000 + i,
-            "season": "20242025",
-            "date": dates[i].strftime("%Y-%m-%d"),
-            "homeTeam": sample_teams[home_idx],
-            "awayTeam": sample_teams[away_idx],
-            "homeScore": home_score,
-            "awayScore": away_score,
-            "totalGoals": home_score + away_score,
-        })
+        games.append(
+            {
+                "gamePk": 2024020000 + i,
+                "season": "20242025",
+                "date": dates[i].strftime("%Y-%m-%d"),
+                "homeTeam": sample_teams[home_idx],
+                "awayTeam": sample_teams[away_idx],
+                "homeScore": home_score,
+                "awayScore": away_score,
+                "totalGoals": home_score + away_score,
+            }
+        )
 
     return pd.DataFrame(games)
 
@@ -488,9 +492,7 @@ class TestModelTraining:
         from src.model import TrainingResult, train_random_forest
 
         df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
-        result = train_random_forest(
-            df, test_size=0.2, n_estimators=10, random_state=42
-        )
+        result = train_random_forest(df, test_size=0.2, n_estimators=10, random_state=42)
 
         assert isinstance(result, TrainingResult)
         assert result.model_type == "RandomForest"
@@ -504,6 +506,7 @@ class TestModelTraining:
     def test_train_xgboost(self, sample_game_data):
         """XGBoost training should return TrainingResult."""
         import os
+
         if os.getenv("RUN_XGBOOST_TESTS") != "1":
             pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
@@ -511,9 +514,7 @@ class TestModelTraining:
         from src.model import TrainingResult, train_xgboost
 
         df = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
-        result = train_xgboost(
-            df, test_size=0.2, n_estimators=10, max_depth=3, random_state=42
-        )
+        result = train_xgboost(df, test_size=0.2, n_estimators=10, max_depth=3, random_state=42)
 
         assert isinstance(result, TrainingResult)
         assert result.model_type == "XGBoost"
@@ -647,7 +648,9 @@ class TestArtifactPersistence:
         assert len(predictions) == len(X_test)
         assert all(p >= 0 for p in predictions)
 
-    def test_poisson_artifact_prediction_matches_training_model(self, sample_game_data, temp_model_dir):
+    def test_poisson_artifact_prediction_matches_training_model(
+        self, sample_game_data, temp_model_dir
+    ):
         """Saved Poisson artifacts should preserve preprocessing at inference time."""
         from src.artifacts import ModelArtifact
         from src.features import add_features
@@ -746,6 +749,7 @@ class TestDataModule:
             import pandas as pd
 
             from src.data import get_cache_path
+
             path = get_cache_path(season, temp_cache_dir)
             if path.exists():
                 return pd.read_csv(path)
@@ -754,6 +758,7 @@ class TestDataModule:
         with patch("src.data.load_cached_season", side_effect=mock_load_cached):
             with patch("src.data.fetch_season_games") as mock_fetch:
                 from src.data import build_dataset
+
                 result = build_dataset(["20242025"], use_cache=True)
 
                 # Should not have called fetch since cache exists
@@ -903,9 +908,7 @@ class TestEndToEndPipeline:
         from src.evaluation import time_series_cv_forecast
         from src.features import add_features
 
-        df_features = add_features(
-            sample_game_data, window=5, min_games=3, include_goalies=False
-        )
+        df_features = add_features(sample_game_data, window=5, min_games=3, include_goalies=False)
         result = time_series_cv_forecast(
             df_features,
             point_model="poisson_glm",
@@ -927,16 +930,12 @@ class TestEndToEndPipeline:
         assert len(sample_game_data) == 200
 
         # Step 2: Add features
-        df_features = add_features(
-            sample_game_data, window=5, min_games=1, include_goalies=False
-        )
+        df_features = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
         validate_features(df_features)
         assert len(df_features) == len(sample_game_data)
 
         # Step 3: Train model
-        result = train_random_forest(
-            df_features, test_size=0.2, n_estimators=20, random_state=42
-        )
+        result = train_random_forest(df_features, test_size=0.2, n_estimators=20, random_state=42)
         assert result.mae > 0
         assert result.mae < result.baseline_mae * 1.5  # Shouldn't be much worse than baseline
 
@@ -961,6 +960,7 @@ class TestEndToEndPipeline:
     def test_full_pipeline_xgboost(self, sample_game_data, temp_model_dir):
         """Full pipeline with XGBoost model."""
         import os
+
         if os.getenv("RUN_XGBOOST_TESTS") != "1":
             pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")
@@ -969,9 +969,7 @@ class TestEndToEndPipeline:
         from src.model import prepare_data, train_xgboost
 
         # Data → Features → Train → Save → Load → Predict
-        df_features = add_features(
-            sample_game_data, window=5, min_games=1, include_goalies=False
-        )
+        df_features = add_features(sample_game_data, window=5, min_games=1, include_goalies=False)
 
         result = train_xgboost(
             df_features, test_size=0.2, n_estimators=20, max_depth=3, random_state=42
@@ -995,9 +993,7 @@ class TestEndToEndPipeline:
         from src.model import train_random_forest
 
         for window in [3, 5, 10]:
-            df = add_features(
-                sample_game_data, window=window, min_games=1, include_goalies=False
-            )
+            df = add_features(sample_game_data, window=window, min_games=1, include_goalies=False)
             result = train_random_forest(df, test_size=0.2, n_estimators=10, random_state=42)
             assert result.mae > 0, f"Failed for window={window}"
 
@@ -1160,16 +1156,18 @@ class TestEdgeCases:
             if other_team == sample_teams[0]:
                 other_team = sample_teams[-1]
 
-            games.append({
-                "gamePk": 2024020000 + i,
-                "season": "20242025",
-                "date": (base_date + timedelta(days=i)).strftime("%Y-%m-%d"),
-                "homeTeam": sample_teams[0] if i % 2 == 0 else other_team,
-                "awayTeam": other_team if i % 2 == 0 else sample_teams[0],
-                "homeScore": np.random.poisson(3),
-                "awayScore": np.random.poisson(3),
-                "totalGoals": 0,  # Will be computed
-            })
+            games.append(
+                {
+                    "gamePk": 2024020000 + i,
+                    "season": "20242025",
+                    "date": (base_date + timedelta(days=i)).strftime("%Y-%m-%d"),
+                    "homeTeam": sample_teams[0] if i % 2 == 0 else other_team,
+                    "awayTeam": other_team if i % 2 == 0 else sample_teams[0],
+                    "homeScore": np.random.poisson(3),
+                    "awayScore": np.random.poisson(3),
+                    "totalGoals": 0,  # Will be computed
+                }
+            )
 
         df = pd.DataFrame(games)
         df["totalGoals"] = df["homeScore"] + df["awayScore"]
@@ -1186,16 +1184,18 @@ class TestEdgeCases:
 
         # Team plays on consecutive days
         for i in range(5):
-            games.append({
-                "gamePk": 2024020000 + i,
-                "season": "20242025",
-                "date": (base_date + timedelta(days=i)).strftime("%Y-%m-%d"),
-                "homeTeam": sample_teams[0],
-                "awayTeam": sample_teams[1],
-                "homeScore": 3,
-                "awayScore": 2,
-                "totalGoals": 5,
-            })
+            games.append(
+                {
+                    "gamePk": 2024020000 + i,
+                    "season": "20242025",
+                    "date": (base_date + timedelta(days=i)).strftime("%Y-%m-%d"),
+                    "homeTeam": sample_teams[0],
+                    "awayTeam": sample_teams[1],
+                    "homeScore": 3,
+                    "awayScore": 2,
+                    "totalGoals": 5,
+                }
+            )
 
         df = pd.DataFrame(games)
 
@@ -1236,16 +1236,18 @@ class TestEdgeCases:
             home_idx = i % len(sample_teams)
             away_idx = (i + 1) % len(sample_teams)
 
-            games.append({
-                "gamePk": 2024020000 + i,
-                "season": "20242025",
-                "date": (base_date + timedelta(days=i // 2)).strftime("%Y-%m-%d"),
-                "homeTeam": sample_teams[home_idx],
-                "awayTeam": sample_teams[away_idx],
-                "homeScore": np.random.randint(0, 3),  # Low scoring
-                "awayScore": np.random.randint(0, 3),
-                "totalGoals": 0,
-            })
+            games.append(
+                {
+                    "gamePk": 2024020000 + i,
+                    "season": "20242025",
+                    "date": (base_date + timedelta(days=i // 2)).strftime("%Y-%m-%d"),
+                    "homeTeam": sample_teams[home_idx],
+                    "awayTeam": sample_teams[away_idx],
+                    "homeScore": np.random.randint(0, 3),  # Low scoring
+                    "awayScore": np.random.randint(0, 3),
+                    "totalGoals": 0,
+                }
+            )
 
         df = pd.DataFrame(games)
         df["totalGoals"] = df["homeScore"] + df["awayScore"]
@@ -1270,6 +1272,7 @@ class TestModelComparison:
     def test_compare_models_returns_dataframe(self, sample_game_data):
         """compare_models should return comparison DataFrame."""
         import os
+
         if os.getenv("RUN_XGBOOST_TESTS") != "1":
             pytest.skip("Set RUN_XGBOOST_TESTS=1 to run XGBoost training tests.")
         pytest.importorskip("xgboost")

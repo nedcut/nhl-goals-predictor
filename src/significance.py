@@ -15,7 +15,7 @@ The estimator is a paired bootstrap over games rather than a t-test over folds:
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
 import numpy as np
 
@@ -38,6 +38,8 @@ class PairedComparison:
     significant: bool
     better_model: str | None
     verdict: str
+    n_blocks: int | None = None
+    resampling_unit: str = "game"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -52,6 +54,7 @@ def paired_bootstrap(
     n_boot: int = 5000,
     alpha: float = 0.05,
     seed: int = 42,
+    groups: Iterable[object] | None = None,
 ) -> PairedComparison:
     """Paired bootstrap of the difference in mean per-game score (lower is better).
 
@@ -84,8 +87,29 @@ def paired_bootstrap(
     mean_diff = float(np.mean(diff))
 
     rng = np.random.default_rng(seed)
-    idx = rng.integers(0, n, size=(n_boot, n))
-    boot_means = diff[idx].mean(axis=1)
+    n_blocks: int | None = None
+    resampling_unit = "game"
+    if groups is None:
+        idx = rng.integers(0, n, size=(n_boot, n))
+        boot_means = diff[idx].mean(axis=1)
+    else:
+        group_values = np.asarray(list(groups), dtype=object)
+        if group_values.shape != a.shape:
+            raise ValueError(
+                f"groups must align with scores, got {group_values.shape} vs {a.shape}"
+            )
+        unique_groups, inverse = np.unique(group_values.astype(str), return_inverse=True)
+        n_blocks = int(len(unique_groups))
+        if n_blocks < 2:
+            raise ValueError("need at least 2 distinct bootstrap groups")
+
+        # Resample whole temporal blocks, preserving within-week dependence. Use
+        # block sums/counts so unequal week sizes retain the correct game weight.
+        block_sums = np.bincount(inverse, weights=diff, minlength=n_blocks)
+        block_counts = np.bincount(inverse, minlength=n_blocks).astype(float)
+        block_idx = rng.integers(0, n_blocks, size=(n_boot, n_blocks))
+        boot_means = block_sums[block_idx].sum(axis=1) / block_counts[block_idx].sum(axis=1)
+        resampling_unit = "block"
 
     lo = float(np.quantile(boot_means, alpha / 2.0))
     hi = float(np.quantile(boot_means, 1.0 - alpha / 2.0))
@@ -122,4 +146,31 @@ def paired_bootstrap(
         significant=significant,
         better_model=better_model,
         verdict=verdict,
+        n_blocks=n_blocks,
+        resampling_unit=resampling_unit,
     )
+
+
+def holm_adjusted_p_values(p_values: Iterable[float]) -> list[float]:
+    """Return Holm-Bonferroni adjusted p-values in original order."""
+    values = np.asarray(list(p_values), dtype=float)
+    if values.ndim != 1:
+        raise ValueError("p_values must be one-dimensional")
+    if values.size == 0:
+        return []
+    if np.any(~np.isfinite(values)) or np.any((values < 0.0) | (values > 1.0)):
+        raise ValueError("p_values must be finite and in [0, 1]")
+
+    order = np.argsort(values)
+    adjusted_sorted = np.empty(values.size, dtype=float)
+    running = 0.0
+    m = values.size
+    for rank, original_index in enumerate(order):
+        adjusted_value = min(1.0, float(values[original_index]) * (m - rank))
+        running = max(running, adjusted_value)
+        adjusted_sorted[rank] = running
+
+    adjusted_values = np.empty(values.size, dtype=float)
+    for rank, original_index in enumerate(order):
+        adjusted_values[original_index] = adjusted_sorted[rank]
+    return adjusted_values.tolist()

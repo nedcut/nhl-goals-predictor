@@ -161,7 +161,7 @@ def test_get_best_model_picks_lowest_mae(tmp_path):
     reg = ModelRegistry(base_path=tmp_path)
     reg.register(_make_artifact(1.9), name="xgboost")
     reg.register(_make_artifact(1.7), name="xgboost")  # best
-    reg.register(_make_artifact(1.5), name="rf")        # best overall, different name
+    reg.register(_make_artifact(1.5), name="rf")  # best overall, different name
 
     assert reg.get_best_model()["mae"] == 1.5
     assert reg.get_best_model(name="xgboost")["mae"] == 1.7

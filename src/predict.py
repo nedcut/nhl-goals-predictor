@@ -105,6 +105,8 @@ def predict_games(
     model_path: Path,
     historical_df: pd.DataFrame,
     seasons: Optional[List[str]] = None,
+    *,
+    artifact: ModelArtifact | None = None,
 ) -> pd.DataFrame:
     """Make predictions for upcoming games.
 
@@ -125,7 +127,7 @@ def predict_games(
         Predictions with date, homeTeam, awayTeam, predicted_total_goals.
     """
     # Load model artifact
-    artifact = ModelArtifact.load(model_path)
+    artifact = artifact or ModelArtifact.load(model_path)
     logger.info("Loaded model: %s", artifact.metadata.model_type)
     include_xg = _model_requires_xg(artifact.metadata.feature_names)
 
@@ -167,8 +169,11 @@ def predict_games(
     historical_features = combined[~combined["gamePk"].isin(upcoming_game_ids)]
     fill_values = feature_fill_values(historical_features, expected_features)
 
-    # Prepare features for prediction in exact model order
-    X = impute_features(upcoming_with_features[expected_features].copy(), fill_values)
+    # Prepare the serving input under the artifact's explicit interface.
+    if artifact.metadata.prediction_interface == "game_frame":
+        X = upcoming_with_features
+    else:
+        X = impute_features(upcoming_with_features[expected_features].copy(), fill_values)
 
     # Make predictions
     predictions = artifact.predict(X)
@@ -189,6 +194,7 @@ def predict_games_probabilistic(
     thresholds: Optional[List[float]] = None,
     max_goals: int = 20,
     cal_fraction: float = 0.2,
+    artifact: ModelArtifact | None = None,
 ) -> pd.DataFrame:
     """Probabilistic predictions for upcoming games.
 
@@ -202,7 +208,7 @@ def predict_games_probabilistic(
     if thresholds is None:
         thresholds = [5.5, 6.5, 7.5]
 
-    artifact = ModelArtifact.load(model_path)
+    artifact = artifact or ModelArtifact.load(model_path)
     expected_features = artifact.metadata.feature_names
     include_xg = _model_requires_xg(expected_features)
 
@@ -228,6 +234,8 @@ def predict_games_probabilistic(
     fill_values = feature_fill_values(hist, expected_features)
 
     def build_X(frame: pd.DataFrame) -> pd.DataFrame:
+        if artifact.metadata.prediction_interface == "game_frame":
+            return frame
         return impute_features(frame.reindex(columns=expected_features).copy(), fill_values)
 
     n_hist = len(hist)
@@ -266,7 +274,9 @@ def predict_games_probabilistic(
     elif dist_model == "nb2":
         pmf = nb2_pmf_matrix(mu_up, alpha=float(nb2_alpha), max_goals=max_goals)
     else:
-        pmf = poisson_mixture_pmf_matrix(mu_up, weight=float(mix_w), multiplier=float(mix_m), max_goals=max_goals)
+        pmf = poisson_mixture_pmf_matrix(
+            mu_up, weight=float(mix_w), multiplier=float(mix_m), max_goals=max_goals
+        )
 
     results = up[["gamePk", "date", "homeTeam", "awayTeam"]].copy()
     results["mu"] = mu_up.astype(float)
@@ -302,6 +312,7 @@ def predict_games_live(
     *,
     thresholds: Optional[List[float]] = None,
     max_goals: int = 20,
+    artifact: ModelArtifact | None = None,
 ) -> pd.DataFrame:
     """Live-aware predictions with residual-goals updates for LIVE games."""
     if thresholds is None:
@@ -314,6 +325,7 @@ def predict_games_live(
         dist_model="nb2",
         thresholds=thresholds,
         max_goals=max_goals,
+        artifact=artifact,
     )
     if pre.empty:
         return pre
@@ -376,8 +388,12 @@ def predict_games_live(
             "pmf": live_pmf.tolist(),
         }
         for t in thresholds:
-            record[f"pregame_p_over_{t:g}"] = float(prob_over_from_pmf(pre_pmf[None, :], threshold=t)[0])
-            record[f"live_p_over_{t:g}"] = float(prob_over_from_pmf(live_pmf[None, :], threshold=t)[0])
+            record[f"pregame_p_over_{t:g}"] = float(
+                prob_over_from_pmf(pre_pmf[None, :], threshold=t)[0]
+            )
+            record[f"live_p_over_{t:g}"] = float(
+                prob_over_from_pmf(live_pmf[None, :], threshold=t)[0]
+            )
         rows.append(record)
 
     return pd.DataFrame(rows).sort_values(["date", "gamePk"]).reset_index(drop=True)
@@ -385,9 +401,7 @@ def predict_games_live(
 
 def main(argv: Optional[List[str]] = None) -> None:
     """Main entry point for the prediction CLI."""
-    parser = argparse.ArgumentParser(
-        description="Predict total goals for upcoming NHL games"
-    )
+    parser = argparse.ArgumentParser(description="Predict total goals for upcoming NHL games")
     parser.add_argument(
         "--model",
         type=Path,

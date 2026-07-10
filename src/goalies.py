@@ -200,12 +200,14 @@ def _compute_goalie_rolling_for_side(
 
     # Create a goalie-game dataframe for this side
     goalie_games = df[["gamePk", "date", goalie_col, saves_col, shots_col, goals_col]].copy()
-    goalie_games = goalie_games.rename(columns={
-        goalie_col: "goalie_id",
-        saves_col: "saves",
-        shots_col: "shots",
-        goals_col: "goals_against",
-    })
+    goalie_games = goalie_games.rename(
+        columns={
+            goalie_col: "goalie_id",
+            saves_col: "saves",
+            shots_col: "shots",
+            goals_col: "goals_against",
+        }
+    )
 
     # Remove rows without goalie data
     goalie_games = goalie_games.dropna(subset=["goalie_id"])
@@ -238,14 +240,14 @@ def _compute_goalie_rolling_for_side(
     goalie_games[f"{side}_goalie_sv_pct"] = np.where(
         goalie_games["rolling_shots"] > 0,
         goalie_games["rolling_saves"] / goalie_games["rolling_shots"],
-        np.nan
+        np.nan,
     )
 
     # Compute GAA: total_goals / games_played (within rolling window)
     goalie_games[f"{side}_goalie_gaa"] = np.where(
         goalie_games["rolling_games"] > 0,
         goalie_games["rolling_goals"] / goalie_games["rolling_games"],
-        np.nan
+        np.nan,
     )
 
     # Return only the columns we need for merging

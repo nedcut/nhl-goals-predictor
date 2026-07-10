@@ -79,7 +79,9 @@ def _first_existing(df: pd.DataFrame, candidates: list[str], label: str) -> str:
 def _standardize_xg_schema(df: pd.DataFrame, season: str) -> pd.DataFrame:
     """Validate and map MoneyPuck columns to canonical schema."""
     if df.empty:
-        return pd.DataFrame(columns=["season", "date", "homeTeam", "awayTeam", "home_xG", "away_xG"])
+        return pd.DataFrame(
+            columns=["season", "date", "homeTeam", "awayTeam", "home_xG", "away_xG"]
+        )
 
     season_col = "season" if "season" in df.columns else None
     date_col = _first_existing(df, ["date", "gameDate", "game_date"], "date")
@@ -175,7 +177,9 @@ def load_xg_games(seasons: Iterable[str], *, use_cache: bool = True) -> pd.DataF
                 time.sleep(config.data.xg_request_delay)
         rows.append(season_df)
     if not rows:
-        return pd.DataFrame(columns=["season", "date", "homeTeam", "awayTeam", "home_xG", "away_xG"])
+        return pd.DataFrame(
+            columns=["season", "date", "homeTeam", "awayTeam", "home_xG", "away_xG"]
+        )
     return pd.concat(rows, ignore_index=True)
 
 

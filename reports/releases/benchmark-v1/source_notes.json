@@ -1,0 +1,53 @@
+{
+  "release_id": "benchmark-v1",
+  "git_commit": "d69c8ec03bd239dd5549c492544d2b9972435df5",
+  "data_fingerprint": "e6a09face2c5bf823c9c75a35ea19c1ce21dbedbbefab13ac55110cb42101e15",
+  "protocol": {
+    "version": "nhl-total-goals-v1",
+    "training_seasons": [
+      "20222023",
+      "20232024",
+      "20242025"
+    ],
+    "holdout_season": "20252026",
+    "game_types": [
+      "R"
+    ],
+    "dist_model": "nb2",
+    "primary_threshold": 6.5,
+    "thresholds": [
+      5.5,
+      6.5,
+      7.5
+    ],
+    "cal_fraction": 0.2,
+    "max_goals": 20,
+    "include_goalies": false,
+    "include_xg": false,
+    "include_multi_window": true,
+    "include_interactions": true,
+    "include_temporal": true,
+    "bootstrap_unit": "iso_week",
+    "multiple_testing": "holm-bonferroni",
+    "notes": [
+      "Primary cohort is regular-season games only.",
+      "The 2025-26 season is untouched by hyperparameter tuning.",
+      "Core-v1 excludes goalie and xG features until their historical coverage is release-grade."
+    ]
+  },
+  "chart_map": [
+    {
+      "section": "Candidate performance",
+      "question": "How do candidate weighted scores compare?",
+      "family": "comparison and ranking",
+      "type": "bar",
+      "fields": [
+        "model",
+        "weighted_score",
+        "mae",
+        "crps"
+      ],
+      "takeaway": "Model score differences are small and require uncertainty checks."
+    }
+  ]
+}

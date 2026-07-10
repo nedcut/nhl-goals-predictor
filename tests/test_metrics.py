@@ -39,8 +39,8 @@ def test_latency_percentiles_are_deterministic():
 
     lat = reg.snapshot()["latency_ms"]
     assert lat["samples"] == 5
-    assert lat["p50"] == 30.0   # nearest-rank: ceil(0.50*5)=3 -> 30
-    assert lat["p95"] == 50.0   # ceil(0.95*5)=5 -> 50
+    assert lat["p50"] == 30.0  # nearest-rank: ceil(0.50*5)=3 -> 30
+    assert lat["p95"] == 50.0  # ceil(0.95*5)=5 -> 50
 
 
 def test_percentile_helper_edges():

@@ -13,7 +13,7 @@ from src.champion import (
 from src.evaluation import time_series_cv_forecast
 from src.features import add_features
 from src.model import FEATURE_COLUMNS_ATTR, get_feature_columns
-from src.significance import paired_bootstrap
+from src.significance import holm_adjusted_p_values, paired_bootstrap
 
 
 def test_paired_bootstrap_detects_clear_winner():
@@ -42,6 +42,21 @@ def test_paired_bootstrap_calls_noise_insignificant():
 def test_paired_bootstrap_requires_aligned_lengths():
     with pytest.raises(ValueError):
         paired_bootstrap(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0]))
+
+
+def test_paired_bootstrap_resamples_whole_blocks():
+    a = np.array([1.0, 1.1, 1.2, 1.3, 1.4, 1.5])
+    b = a + 0.2
+    groups = ["w1", "w1", "w2", "w2", "w3", "w3"]
+    result = paired_bootstrap(a, b, groups=groups, n_boot=500)
+    assert result.resampling_unit == "block"
+    assert result.n_blocks == 3
+    assert result.n_games == 6
+
+
+def test_holm_adjustment_is_monotone_and_restores_original_order():
+    adjusted = holm_adjusted_p_values([0.03, 0.001, 0.02, 0.8])
+    assert adjusted == pytest.approx([0.06, 0.004, 0.06, 0.8])
 
 
 def test_per_game_weighted_scores_reconstruct_aggregate():

@@ -55,6 +55,7 @@ logger = get_logger(__name__)
 # Optional XGBoost import
 try:
     import xgboost as xgb
+
     HAS_XGBOOST = True
 except ImportError:
     HAS_XGBOOST = False
@@ -63,6 +64,7 @@ except ImportError:
 @dataclass
 class TrainingResult:
     """Container for training results and artifacts."""
+
     model: Any  # RandomForestRegressor or XGBRegressor
     model_type: str
     feature_names: List[str]
@@ -76,6 +78,7 @@ class TrainingResult:
 @dataclass
 class CVResult:
     """Container for cross-validation results."""
+
     model_type: str
     mae_scores: List[float]
     rmse_scores: List[float]
@@ -99,40 +102,80 @@ FEATURE_COLUMNS_ATTR = "feature_columns"
 # real-world column is unlikely to collide with them.
 _FEATURE_PREFIXES = (
     # Basic rolling features
-    "home_avg_", "away_avg_", "home_win_", "away_win_",
-    "home_rest_", "away_rest_", "home_is_", "away_is_",
-    "home_games_", "away_games_",
+    "home_avg_",
+    "away_avg_",
+    "home_win_",
+    "away_win_",
+    "home_rest_",
+    "away_rest_",
+    "home_is_",
+    "away_is_",
+    "home_games_",
+    "away_games_",
     # Multi-window features (e.g., home_avg_GF_5g, home_std_GF_10g)
-    "home_std_", "away_std_",
+    "home_std_",
+    "away_std_",
     # Goalie features (numeric only)
-    "home_goalie_sv_", "away_goalie_sv_",
-    "home_goalie_gaa", "away_goalie_gaa",
-    "home_goalie_vs_", "away_goalie_vs_",
+    "home_goalie_sv_",
+    "away_goalie_sv_",
+    "home_goalie_gaa",
+    "away_goalie_gaa",
+    "home_goalie_vs_",
+    "away_goalie_vs_",
     # Head-to-head and venue features
-    "h2h_", "venue_",
+    "h2h_",
+    "venue_",
     # Interaction features
-    "scoring_", "opponent_", "rest_advantage", "form_diff", "combined_",
-    "opp_threat", "xg_", "home_xg_", "away_xg_",
+    "scoring_",
+    "opponent_",
+    "rest_advantage",
+    "form_diff",
+    "combined_",
+    "opp_threat",
+    "xg_",
+    "home_xg_",
+    "away_xg_",
     # Legacy column names for backwards compatibility
-    "homeTeam_avg_", "awayTeam_avg_",
+    "homeTeam_avg_",
+    "awayTeam_avg_",
 )
 
 # Temporal features matched by EXACT name. Using exact names (rather than a
 # "month" prefix that would also swallow e.g. "monthly_attendance") prevents an
 # unrelated future column from being silently treated as a model input.
-_TEMPORAL_FEATURE_NAMES = frozenset({
-    "month", "day_of_week", "is_weekend", "days_into_season",
-    "season_progress", "is_late_season", "is_early_season",
-})
+_TEMPORAL_FEATURE_NAMES = frozenset(
+    {
+        "month",
+        "day_of_week",
+        "is_weekend",
+        "days_into_season",
+        "season_progress",
+        "is_late_season",
+        "is_early_season",
+    }
+)
 
 # Columns that must NEVER be treated as features even if they match a prefix.
 # These are the target, raw outcomes, and identity columns — including them
 # would leak the label or add useless identifiers.
-_NON_FEATURE_COLUMNS = frozenset({
-    "totalGoals", "homeScore", "awayScore", "home_goals", "away_goals",
-    "goals_for", "goals_against", "gamePk", "season", "date",
-    "homeTeam", "awayTeam", "team", "opponent",
-})
+_NON_FEATURE_COLUMNS = frozenset(
+    {
+        "totalGoals",
+        "homeScore",
+        "awayScore",
+        "home_goals",
+        "away_goals",
+        "goals_for",
+        "goals_against",
+        "gamePk",
+        "season",
+        "date",
+        "homeTeam",
+        "awayTeam",
+        "team",
+        "opponent",
+    }
+)
 
 
 def get_feature_columns(df: pd.DataFrame, *, _use_registry: bool = True) -> List[str]:
@@ -171,9 +214,7 @@ def get_feature_columns(df: pd.DataFrame, *, _use_registry: bool = True) -> List
             # No registry stamp (e.g. df.attrs dropped by a pandas op since
             # add_features). Detection below may resolve a different set than the
             # model was trained on, so make the fallback observable.
-            logger.debug(
-                "No feature registry on frame; falling back to name-based detection."
-            )
+            logger.debug("No feature registry on frame; falling back to name-based detection.")
 
     feature_cols: List[str] = []
     for col in df.columns:
@@ -193,8 +234,7 @@ def get_feature_columns(df: pd.DataFrame, *, _use_registry: bool = True) -> List
 
 
 def prepare_features(
-    df: pd.DataFrame,
-    feature_cols: Optional[Iterable[str]] = None
+    df: pd.DataFrame, feature_cols: Optional[Iterable[str]] = None
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """Prepare the feature matrix and target vector for modelling.
 
@@ -255,7 +295,8 @@ def _prepare_clean_feature_frame(
     if n_dropped > 0:
         logger.info(
             "Dropped %d rows with missing model inputs (%.1f%% of data)",
-            n_dropped, 100 * n_dropped / n_before
+            n_dropped,
+            100 * n_dropped / n_before,
         )
 
     if df_clean.empty:
@@ -410,9 +451,7 @@ def train_xgboost(
         params["learning_rate"] = learning_rate
     params.update(
         {
-            "random_state": (
-                config.model.random_state if random_state is None else random_state
-            ),
+            "random_state": (config.model.random_state if random_state is None else random_state),
             "n_jobs": -1,
             "verbosity": 0,
         }
@@ -541,26 +580,31 @@ def train_ensemble(
 
     # Define base estimators
     estimators = [
-        ("rf", RandomForestRegressor(
-            n_estimators=100,
-            max_depth=6,
-            random_state=random_state,
-            n_jobs=-1
-        )),
+        (
+            "rf",
+            RandomForestRegressor(
+                n_estimators=100, max_depth=6, random_state=random_state, n_jobs=-1
+            ),
+        ),
         ("ridge", Ridge(alpha=1.0)),
         ("poisson", PoissonRegressor(alpha=1.0, max_iter=500)),
     ]
 
     # Add XGBoost if available
     if HAS_XGBOOST:
-        estimators.append(("xgb", xgb.XGBRegressor(
-            n_estimators=100,
-            max_depth=3,
-            learning_rate=0.05,
-            random_state=random_state,
-            n_jobs=-1,
-            verbosity=0,
-        )))
+        estimators.append(
+            (
+                "xgb",
+                xgb.XGBRegressor(
+                    n_estimators=100,
+                    max_depth=3,
+                    learning_rate=0.05,
+                    random_state=random_state,
+                    n_jobs=-1,
+                    verbosity=0,
+                ),
+            )
+        )
 
     # Create stacking regressor with Ridge as meta-learner
     stack_model = StackingRegressor(
@@ -665,7 +709,9 @@ def cross_validate(
         mae_scores.append(mae)
         rmse_scores.append(rmse)
 
-        print(f"  Fold {fold}: MAE={mae:.3f}, RMSE={rmse:.3f} (train={len(X_train)}, test={len(X_test)})")
+        print(
+            f"  Fold {fold}: MAE={mae:.3f}, RMSE={rmse:.3f} (train={len(X_train)}, test={len(X_test)})"
+        )
 
     result = CVResult(model_type=model_name, mae_scores=mae_scores, rmse_scores=rmse_scores)
     print(f"\n{model_name} CV Results: MAE={result.mae_mean:.3f} ± {result.mae_std:.3f}")
@@ -872,23 +918,27 @@ def compare_models(
     # Random Forest
     print("\n" + "=" * 50)
     rf_result = train_random_forest(df, test_size=test_size)
-    results.append({
-        "Model": "Random Forest",
-        "MAE": rf_result.mae,
-        "RMSE": rf_result.rmse,
-        "vs Baseline": f"{(1 - rf_result.mae / rf_result.baseline_mae) * 100:.1f}% better",
-    })
+    results.append(
+        {
+            "Model": "Random Forest",
+            "MAE": rf_result.mae,
+            "RMSE": rf_result.rmse,
+            "vs Baseline": f"{(1 - rf_result.mae / rf_result.baseline_mae) * 100:.1f}% better",
+        }
+    )
 
     # XGBoost
     if HAS_XGBOOST:
         print("\n" + "-" * 50)
         xgb_result = train_xgboost(df, test_size=test_size)
-        results.append({
-            "Model": "XGBoost",
-            "MAE": xgb_result.mae,
-            "RMSE": xgb_result.rmse,
-            "vs Baseline": f"{(1 - xgb_result.mae / xgb_result.baseline_mae) * 100:.1f}% better",
-        })
+        results.append(
+            {
+                "Model": "XGBoost",
+                "MAE": xgb_result.mae,
+                "RMSE": xgb_result.rmse,
+                "vs Baseline": f"{(1 - xgb_result.mae / xgb_result.baseline_mae) * 100:.1f}% better",
+            }
+        )
     else:
         print("XGBoost not installed, skipping.")
 
@@ -896,12 +946,14 @@ def compare_models(
     print("\n" + "-" * 50)
     try:
         poisson_result = train_poisson(df, test_size=test_size)
-        results.append({
-            "Model": "Poisson",
-            "MAE": poisson_result.mae,
-            "RMSE": poisson_result.rmse,
-            "vs Baseline": f"{(1 - poisson_result.mae / poisson_result.baseline_mae) * 100:.1f}% better",
-        })
+        results.append(
+            {
+                "Model": "Poisson",
+                "MAE": poisson_result.mae,
+                "RMSE": poisson_result.rmse,
+                "vs Baseline": f"{(1 - poisson_result.mae / poisson_result.baseline_mae) * 100:.1f}% better",
+            }
+        )
     except Exception as e:
         print(f"Poisson regression failed: {e}")
 
@@ -910,22 +962,26 @@ def compare_models(
         print("\n" + "-" * 50)
         try:
             ensemble_result = train_ensemble(df, test_size=test_size)
-            results.append({
-                "Model": "Ensemble",
-                "MAE": ensemble_result.mae,
-                "RMSE": ensemble_result.rmse,
-                "vs Baseline": f"{(1 - ensemble_result.mae / ensemble_result.baseline_mae) * 100:.1f}% better",
-            })
+            results.append(
+                {
+                    "Model": "Ensemble",
+                    "MAE": ensemble_result.mae,
+                    "RMSE": ensemble_result.rmse,
+                    "vs Baseline": f"{(1 - ensemble_result.mae / ensemble_result.baseline_mae) * 100:.1f}% better",
+                }
+            )
         except Exception as e:
             print(f"Ensemble training failed: {e}")
 
     # Baseline
-    results.append({
-        "Model": "Baseline (mean)",
-        "MAE": rf_result.baseline_mae,
-        "RMSE": np.nan,
-        "vs Baseline": "-",
-    })
+    results.append(
+        {
+            "Model": "Baseline (mean)",
+            "MAE": rf_result.baseline_mae,
+            "RMSE": np.nan,
+            "vs Baseline": "-",
+        }
+    )
 
     comparison = pd.DataFrame(results)
     print("\n" + "=" * 60)
@@ -954,9 +1010,7 @@ def train_and_evaluate(
 
 
 def plot_feature_importance(
-    result: TrainingResult,
-    top_n: int = 20,
-    save_path: Optional[Path] = None
+    result: TrainingResult, top_n: int = 20, save_path: Optional[Path] = None
 ) -> None:
     """Plot feature importances from a trained model.
 
@@ -1094,17 +1148,21 @@ def save_model(
 
     if use_artifact:
         from .artifacts import ModelArtifact
+
         artifact = ModelArtifact.from_training_result(result, seasons=seasons)
         artifact.save(path)
         logger.info("Model artifact saved to %s", path)
     else:
         # Legacy format for backwards compatibility
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({
-            "model": result.model,
-            "model_type": result.model_type,
-            "feature_names": result.feature_names,
-        }, path)
+        joblib.dump(
+            {
+                "model": result.model,
+                "model_type": result.model_type,
+                "feature_names": result.feature_names,
+            },
+            path,
+        )
         logger.info("Model saved to %s (legacy format)", path)
 
 
@@ -1130,6 +1188,7 @@ def load_model(path: Path) -> Tuple[Any, str, List[str]]:
         # Try loading as artifact
         try:
             from .artifacts import ModelArtifact
+
             artifact = ModelArtifact.load(path)
             return artifact.model, artifact.metadata.model_type, artifact.metadata.feature_names
         except Exception:
@@ -1157,4 +1216,5 @@ def load_artifact(path: Path) -> "ModelArtifact":
         Complete artifact with model and metadata.
     """
     from .artifacts import ModelArtifact
+
     return ModelArtifact.load(path)

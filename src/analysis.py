@@ -91,7 +91,9 @@ def run_ablation_study(
             results[name] = cv.metrics_mean
             continue
 
-        feat = add_features(raw_df, include_temporal=True, include_multi_window=True, **(feature_kwargs or {}))
+        feat = add_features(
+            raw_df, include_temporal=True, include_multi_window=True, **(feature_kwargs or {})
+        )
         if name == "no_h2h_venue":
             drop_cols = [c for c in feat.columns if c.startswith("h2h_") or c.startswith("venue_")]
             feat = feat.drop(columns=drop_cols, errors="ignore")
