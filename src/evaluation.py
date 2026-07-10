@@ -68,6 +68,11 @@ class FoldForecastMetrics:
     conformal_q: float
 
 
+def _threshold_label(threshold: float) -> str:
+    """Stable string key for a total-goals line (e.g. 6.5 -> '6.5')."""
+    return f"{float(threshold):g}"
+
+
 @dataclass(frozen=True)
 class CVForecastResult:
     point_model: PointModel
@@ -81,6 +86,11 @@ class CVForecastResult:
     # Per-game score components pooled across all folds, keyed by metric name.
     # game_key aligns the same game across models so scores can be paired.
     per_game: dict[str, Any] | None = None
+    # Multi-threshold over/under scores: label -> {brier, log_loss}.
+    # Mean of per-fold metrics (same aggregation as metrics_mean over_brier).
+    threshold_metrics: dict[str, dict[str, float]] | None = None
+    # Reliability curves per threshold label (optional diagnostic).
+    reliability_by_threshold: dict[str, list] | None = None
 
     _METRIC_KEYS = (
         "mae",
@@ -178,6 +188,7 @@ def time_series_cv_forecast(
     point_model: PointModel = "xgb",
     dist_model: DistModel = "nb2",
     threshold: float = 6.5,
+    thresholds: list[float] | None = None,
     n_splits: int = 5,
     cal_fraction: float = 0.2,
     max_goals: int = 20,
@@ -190,6 +201,12 @@ def time_series_cv_forecast(
 
     Parameters
     ----------
+    threshold : float
+        Primary over/under line used for fold metrics, per-game Brier, and the
+        top-level reliability curve (champion weighting stays on this line).
+    thresholds : list of float, optional
+        Additional lines to score (Brier + log-loss + reliability). If None,
+        only ``threshold`` is reported under ``threshold_metrics``.
     return_diagnostics : bool
         If True, include row-level fold diagnostics in the result payload.
     xgb_params : dict, optional
@@ -197,6 +214,10 @@ def time_series_cv_forecast(
     """
     if not (0.05 <= cal_fraction <= 0.5):
         raise ValueError("cal_fraction must be in [0.05, 0.5]")
+
+    eval_thresholds = list(thresholds) if thresholds is not None else [threshold]
+    if not eval_thresholds:
+        raise ValueError("thresholds must be non-empty when provided")
 
     df = df.sort_values("date").reset_index(drop=True)
 
@@ -217,6 +238,12 @@ def time_series_cv_forecast(
     pit_values: list[float] = []
     folds: list[FoldForecastMetrics] = []
     diagnostics_rows: list[dict[str, Any]] = []
+
+    # Per-threshold accumulators (label -> fold scores / pooled probs).
+    thresh_fold_brier: dict[str, list[float]] = {_threshold_label(t): [] for t in eval_thresholds}
+    thresh_fold_ll: dict[str, list[float]] = {_threshold_label(t): [] for t in eval_thresholds}
+    thresh_all_p: dict[str, list[float]] = {_threshold_label(t): [] for t in eval_thresholds}
+    thresh_all_y: dict[str, list[int]] = {_threshold_label(t): [] for t in eval_thresholds}
 
     # Per-game score components pooled across folds (for paired significance tests).
     per_game_keys: list[str] = []
@@ -301,7 +328,7 @@ def time_series_cv_forecast(
         crps = float(np.mean(crps_per_game))
         pit_values.extend(randomized_pit(pmf_test, y_test.astype(int)).tolist())
 
-        # Over/under event evaluation
+        # Primary over/under event evaluation (champion / fold metrics)
         p_over = prob_over_from_pmf(pmf_test, threshold=threshold)
         y_over = (y_test > threshold).astype(int)
         brier_per_game = (p_over - y_over) ** 2
@@ -310,6 +337,16 @@ def time_series_cv_forecast(
 
         all_over_p.extend(p_over.tolist())
         all_over_y.extend(y_over.tolist())
+
+        # Multi-threshold over/under (Brier + log-loss per line)
+        for t in eval_thresholds:
+            label = _threshold_label(t)
+            p_t = prob_over_from_pmf(pmf_test, threshold=t)
+            y_t = (y_test > t).astype(int)
+            thresh_fold_brier[label].append(_brier_score(p_t, y_t))
+            thresh_fold_ll[label].append(_log_loss(p_t, y_t))
+            thresh_all_p[label].extend(p_t.tolist())
+            thresh_all_y[label].extend(y_t.tolist())
 
         # Stable per-game key so the same game can be paired across models.
         game_keys = (
@@ -380,6 +417,22 @@ def time_series_cv_forecast(
 
     bins = reliability_curve(np.asarray(all_over_p), np.asarray(all_over_y), n_bins=10)
 
+    threshold_metrics = {
+        label: {
+            "brier": float(np.mean(thresh_fold_brier[label])),
+            "log_loss": float(np.mean(thresh_fold_ll[label])),
+        }
+        for label in thresh_fold_brier
+    }
+    reliability_by_threshold = {
+        label: reliability_curve(
+            np.asarray(thresh_all_p[label]),
+            np.asarray(thresh_all_y[label]),
+            n_bins=10,
+        )
+        for label in thresh_all_p
+    }
+
     per_game = {
         "game_key": np.asarray(per_game_keys, dtype=object),
         "abs_error": np.asarray(per_game_abs_err, dtype=float),
@@ -398,4 +451,6 @@ def time_series_cv_forecast(
         pit_values=pit_values,
         diagnostics=diagnostics_rows if return_diagnostics else None,
         per_game=per_game,
+        threshold_metrics=threshold_metrics,
+        reliability_by_threshold=reliability_by_threshold,
     )
