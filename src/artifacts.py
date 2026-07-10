@@ -34,6 +34,7 @@ import joblib
 
 try:
     import xgboost as xgb
+
     HAS_XGBOOST = True
 except ImportError:
     HAS_XGBOOST = False
@@ -85,9 +86,7 @@ def _check_xgb_base_score(model: Any, path: Path) -> None:
     """Reject XGBoost regressors whose learned intercept is implausible."""
     if not isinstance(model, xgb.XGBRegressor):
         return
-    learner_param = json.loads(model.get_booster().save_config())["learner"][
-        "learner_model_param"
-    ]
+    learner_param = json.loads(model.get_booster().save_config())["learner"]["learner_model_param"]
     scores = _parse_base_score(learner_param["base_score"])
     lo, hi = _XGB_SANE_BASE_SCORE
     if not scores or not all(lo <= s <= hi for s in scores):

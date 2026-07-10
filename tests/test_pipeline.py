@@ -692,10 +692,16 @@ class TestArtifactPersistence:
         model.fit(X_train, y_train)
 
         from src.model import TrainingResult
+
         result = TrainingResult(
-            model=model, model_type="XGBoost", feature_names=feature_names,
-            y_test=y_train.iloc[:5], y_pred=model.predict(X_train.iloc[:5]),
-            mae=1.8, rmse=2.3, baseline_mae=1.9,
+            model=model,
+            model_type="XGBoost",
+            feature_names=feature_names,
+            y_test=y_train.iloc[:5],
+            y_pred=model.predict(X_train.iloc[:5]),
+            mae=1.8,
+            rmse=2.3,
+            baseline_mae=1.9,
         )
         artifact = ModelArtifact.from_training_result(result)
         model_path = temp_model_dir / "xgb_model"
@@ -709,7 +715,9 @@ class TestArtifactPersistence:
         loaded = ModelArtifact.load(model_path)
         assert np.allclose(loaded.predict(X_test), model.predict(X_test))
 
-    def test_xgboost_artifact_with_lost_intercept_is_rejected(self, sample_game_data, temp_model_dir):
+    def test_xgboost_artifact_with_lost_intercept_is_rejected(
+        self, sample_game_data, temp_model_dir
+    ):
         """Loading an XGBoost regressor with an implausible base_score should fail.
 
         Guards against the pickle-across-versions failure where the learned
@@ -727,9 +735,15 @@ class TestArtifactPersistence:
         model.fit(X_train, y_train)
 
         metadata = ModelMetadata(
-            model_type="XGBoost", feature_names=feature_names,
-            mae=1.8, rmse=2.3, baseline_mae=1.9, improvement_pct=5.0,
-            training_date="2026-01-01", n_training_samples=100, n_test_samples=25,
+            model_type="XGBoost",
+            feature_names=feature_names,
+            mae=1.8,
+            rmse=2.3,
+            baseline_mae=1.9,
+            improvement_pct=5.0,
+            training_date="2026-01-01",
+            n_training_samples=100,
+            n_test_samples=25,
         )
         model_path = temp_model_dir / "broken_xgb"
         ModelArtifact(model=model, metadata=metadata).save(model_path)
