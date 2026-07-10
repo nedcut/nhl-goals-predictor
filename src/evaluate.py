@@ -60,7 +60,11 @@ def _plot_pit(pit: list[float], *, title: str, out_path: Path) -> None:
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Evaluate probabilistic forecasts with time-series CV")
     parser.add_argument("--seasons", nargs="+", default=["20232024", "20242025"])
-    parser.add_argument("--point-model", choices=["xgb", "poisson_glm", "team_strength"], default="xgb")
+    parser.add_argument(
+        "--point-model",
+        choices=["xgb", "poisson_glm", "team_strength", "double_poisson"],
+        default="xgb",
+    )
     parser.add_argument("--dist-model", choices=["poisson", "nb2", "poisson_mixture"], default="nb2")
     parser.add_argument(
         "--threshold",

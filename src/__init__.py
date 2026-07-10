@@ -49,6 +49,8 @@ __all__ = [
     # Baselines
     "TeamStrengthPoissonModel",
     "TeamStrengthConfig",
+    "DoublePoissonModel",
+    "DoublePoissonConfig",
     # Artifacts
     "ModelArtifact",
     "ModelMetadata",
@@ -91,6 +93,8 @@ _LAZY_ATTR_MODULES = {
     "run_portfolio_pipeline": ".portfolio",
     "TeamStrengthPoissonModel": ".team_strength",
     "TeamStrengthConfig": ".team_strength",
+    "DoublePoissonModel": ".double_poisson",
+    "DoublePoissonConfig": ".double_poisson",
     "ModelArtifact": ".artifacts",
     "ModelMetadata": ".artifacts",
     "ModelRegistry": ".registry",
