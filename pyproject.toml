@@ -41,7 +41,7 @@ known-first-party = ["src"]
 # the files list is meant to grow as more modules gain annotations.
 # ---------------------------------------------------------------------------
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"  # match CI lint runner; numpy>=2.5 stubs use PEP 695 `type`
 ignore_missing_imports = true   # pandas/xgboost/etc. ship partial or no stubs
 warn_unused_ignores = true
 warn_redundant_casts = true
