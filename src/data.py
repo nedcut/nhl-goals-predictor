@@ -114,18 +114,29 @@ def fetch_schedule_week(date: str, include_upcoming: bool = False) -> List[dict]
             is_upcoming = game_state in upcoming_states
 
             if is_completed or (include_upcoming and is_upcoming):
-                games.append({
-                    "gamePk": game["id"],
-                    "season": str(game["season"]),
-                    "gameType": "R" if game["gameType"] == 2 else "P" if game["gameType"] == 3 else "O",
-                    "date": day["date"],
-                    "homeTeam": game["homeTeam"]["placeName"]["default"] + " " + game["homeTeam"]["commonName"]["default"],
-                    "awayTeam": game["awayTeam"]["placeName"]["default"] + " " + game["awayTeam"]["commonName"]["default"],
-                    "homeScore": game["homeTeam"].get("score", 0),
-                    "awayScore": game["awayTeam"].get("score", 0),
-                    "totalGoals": game["homeTeam"].get("score", 0) + game["awayTeam"].get("score", 0),
-                    "gameState": game_state,
-                })
+                games.append(
+                    {
+                        "gamePk": game["id"],
+                        "season": str(game["season"]),
+                        "gameType": "R"
+                        if game["gameType"] == 2
+                        else "P"
+                        if game["gameType"] == 3
+                        else "O",
+                        "date": day["date"],
+                        "homeTeam": game["homeTeam"]["placeName"]["default"]
+                        + " "
+                        + game["homeTeam"]["commonName"]["default"],
+                        "awayTeam": game["awayTeam"]["placeName"]["default"]
+                        + " "
+                        + game["awayTeam"]["commonName"]["default"],
+                        "homeScore": game["homeTeam"].get("score", 0),
+                        "awayScore": game["awayTeam"].get("score", 0),
+                        "totalGoals": game["homeTeam"].get("score", 0)
+                        + game["awayTeam"].get("score", 0),
+                        "gameState": game_state,
+                    }
+                )
     return games
 
 
@@ -282,9 +293,7 @@ def build_dataset(
 
 def _parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Download NHL game logs via the NHL Web API."
-    )
+    parser = argparse.ArgumentParser(description="Download NHL game logs via the NHL Web API.")
     parser.add_argument(
         "--seasons",
         nargs="+",
@@ -321,6 +330,7 @@ def main(argv: List[str] | None = None) -> None:
 
     # Save combined output
     import os
+
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     df.to_csv(args.out, index=False)
     print(f"Saved {len(df)} games to {args.out}")

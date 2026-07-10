@@ -39,10 +39,12 @@ except ImportError:
 import pandas as pd
 
 from .artifacts import ModelArtifact
+from .config import config
 from .conformal import split_conformal_interval
 from .data import build_dataset, recent_seasons
 from .features import add_features, feature_fill_values, impute_features
 from .metrics import registry as metrics_registry
+from .monitoring import PredictionLedger, monitoring_summary
 from .predict import (
     _prepare_upcoming_rows,
     fetch_upcoming_games,
@@ -58,6 +60,7 @@ from .probabilistic import (
     poisson_pmf_matrix,
     prob_over_from_pmf,
 )
+from .registry import ModelRegistry
 
 
 # Pydantic models for API responses
@@ -169,9 +172,11 @@ _prob_calibration: Optional[Dict[str, float]] = None
 # calibration and inference paths, so served predictions match how the model was
 # evaluated instead of depending on the current request batch.
 _feature_impute: Optional[Dict[str, float]] = None
+_monitoring_ledger: Optional[PredictionLedger] = None
 
 # Default configuration
 DEFAULT_MODEL_PATH = Path(os.getenv("NHL_MODEL_PATH", "models/xgboost_v1"))
+DEFAULT_REGISTRY_PATH = Path(os.getenv("NHL_REGISTRY_PATH", "models"))
 DEFAULT_SEASONS = [
     season.strip()
     for season in os.getenv("NHL_HISTORICAL_SEASONS", ",".join(recent_seasons(2))).split(",")
@@ -192,18 +197,33 @@ def _impute_features(X: pd.DataFrame) -> pd.DataFrame:
 
 def _load_startup_state() -> None:
     """Load model and historical data into module globals (called at startup)."""
-    global _artifact, _historical_df, _prob_calibration, _feature_impute
+    global _artifact, _historical_df, _prob_calibration, _feature_impute, _monitoring_ledger
 
-    # Load model
-    model_path = DEFAULT_MODEL_PATH
-    if model_path.with_suffix(".json").exists() or model_path.with_suffix(".joblib").exists():
-        try:
-            _artifact = ModelArtifact.load(model_path)
-            logger.info("Loaded model: %s", _artifact.metadata.model_type)
-        except Exception as e:
-            logger.error("Failed to load model from %s: %s", model_path, e)
-    else:
-        logger.warning("Model not found at %s", model_path)
+    # Load the registry's promoted release by default. An explicit NHL_MODEL_PATH
+    # remains available for controlled migrations, but it must pass the same
+    # release-grade validation contract.
+    _artifact = None
+    try:
+        explicit_model = os.getenv("NHL_MODEL_PATH")
+        if explicit_model:
+            _artifact = ModelArtifact.load(Path(explicit_model))
+            _artifact.validate_for_serving()
+            logger.info("Loaded explicit release artifact: %s", explicit_model)
+        else:
+            registry = ModelRegistry(DEFAULT_REGISTRY_PATH)
+            _artifact = registry.get_production_model(require_release_grade=True)
+            if _artifact is None:
+                logger.warning("No production release is promoted in %s", DEFAULT_REGISTRY_PATH)
+            else:
+                logger.info(
+                    "Loaded production release: %s (%s)",
+                    _artifact.metadata.artifact_id,
+                    _artifact.metadata.benchmark_release,
+                )
+    except Exception as e:
+        logger.error("Failed to load a release-grade production model: %s", e)
+
+    _monitoring_ledger = PredictionLedger() if config.monitoring.enabled else None
 
     # Load historical data
     try:
@@ -216,22 +236,34 @@ def _load_startup_state() -> None:
     if _artifact is not None and _historical_df is not None and not _historical_df.empty:
         try:
             include_xg = any("xg" in c.lower() for c in _artifact.metadata.feature_names)
-            hist = add_features(_historical_df, include_goalies=False, include_xg=include_xg).dropna().copy()
+            if _artifact.metadata.prediction_interface == "game_frame":
+                hist = _historical_df.dropna(subset=["totalGoals"]).copy()
+            else:
+                hist = add_features(
+                    _historical_df, include_goalies=False, include_xg=include_xg
+                ).copy()
             expected = _artifact.metadata.feature_names
-            hist = hist.dropna(subset=expected + ["totalGoals"]).sort_values("date").reset_index(drop=True)
+            hist = (
+                hist.dropna(subset=expected + ["totalGoals"])
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
             if hist.empty:
                 raise ValueError("No historical rows with complete features for calibration.")
 
             # Derive training-representative fill values once, before any model-
             # specific calibration, so inference and calibration impute identically
             # even if the NB2/mixture fit below fails.
-            _feature_impute = feature_fill_values(hist, expected)
+            _feature_impute = feature_fill_values(hist, expected) if expected else {}
 
             # Use the last 20% of historical games as a calibration slice
             n_hist = len(hist)
             cal_size = max(1, int(0.2 * n_hist))
             cal = hist.iloc[n_hist - cal_size :].copy()
-            X_cal = _impute_features(cal.reindex(columns=expected).copy())
+            if _artifact.metadata.prediction_interface == "game_frame":
+                X_cal = cal
+            else:
+                X_cal = _impute_features(cal.reindex(columns=expected).copy())
 
             y_cal = cal["totalGoals"].to_numpy(dtype=float)
             mu_cal = _artifact.predict(X_cal)
@@ -308,7 +340,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", None) or uuid.uuid4().hex[:12]
     logger.error(
         "Unhandled error [%s] on %s %s: %s",
-        request_id, request.method, request.url.path, exc, exc_info=exc,
+        request_id,
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=exc,
     )
     return JSONResponse(
         status_code=500,
@@ -370,7 +406,7 @@ async def get_predictions(
         )
 
     # Make predictions
-    results = predict_games(upcoming, DEFAULT_MODEL_PATH, _historical_df)
+    results = predict_games(upcoming, DEFAULT_MODEL_PATH, _historical_df, artifact=_artifact)
 
     if results.empty:
         return PredictionResponse(
@@ -434,7 +470,9 @@ async def get_probabilistic_predictions(
 
     hist = _historical_df.copy()
     hist["_is_upcoming"] = False
-    combined = pd.concat([hist, upcoming], ignore_index=True).drop_duplicates(subset=["gamePk"], keep="first")
+    combined = pd.concat([hist, upcoming], ignore_index=True).drop_duplicates(
+        subset=["gamePk"], keep="first"
+    )
     include_xg = any("xg" in c.lower() for c in _artifact.metadata.feature_names)
     combined = add_features(combined, include_goalies=False, include_xg=include_xg)
     up = combined[combined["_is_upcoming"] == True].copy()  # noqa: E712
@@ -442,7 +480,10 @@ async def get_probabilistic_predictions(
         raise HTTPException(status_code=503, detail="Could not compute features for upcoming games")
 
     expected = _artifact.metadata.feature_names
-    X = _impute_features(up.reindex(columns=expected).copy())
+    if _artifact.metadata.prediction_interface == "game_frame":
+        X = up
+    else:
+        X = _impute_features(up.reindex(columns=expected).copy())
 
     mu = _artifact.predict(X).astype(float)
     if dist_model == "poisson":
@@ -463,7 +504,9 @@ async def get_probabilistic_predictions(
 
     preds: List[ProbabilisticGamePrediction] = []
     for i, (_, row) in enumerate(up.iterrows()):
-        over_probs = {f">{t:g}": float(prob_over_from_pmf(pmf[i : i + 1], threshold=t)[0]) for t in thresholds}
+        over_probs = {
+            f">{t:g}": float(prob_over_from_pmf(pmf[i : i + 1], threshold=t)[0]) for t in thresholds
+        }
         preds.append(
             ProbabilisticGamePrediction(
                 date=str(row["date"]),
@@ -479,6 +522,31 @@ async def get_probabilistic_predictions(
                 pmf=pmf[i].tolist(),
             )
         )
+
+    if _monitoring_ledger is not None and preds:
+        ledger_rows = []
+        for index, (_, row) in enumerate(up.iterrows()):
+            feature_values = None
+            if _artifact.metadata.prediction_interface == "feature_matrix":
+                feature_values = {
+                    name: float(X.iloc[index][name]) for name in expected if name in X
+                }
+            ledger_rows.append(
+                {
+                    "gamePk": int(row["gamePk"]),
+                    "date": str(row["date"]),
+                    "homeTeam": str(row["homeTeam"]),
+                    "awayTeam": str(row["awayTeam"]),
+                    "mu": float(mu[index]),
+                    "pmf": pmf[index].tolist(),
+                    "over_probs": preds[index].over_probs,
+                    "feature_values": feature_values,
+                }
+            )
+        try:
+            _monitoring_ledger.upsert_predictions(pd.DataFrame(ledger_rows), _artifact)
+        except Exception as error:
+            logger.warning("Prediction monitoring write failed: %s", error)
 
     metrics_registry.increment("predictions_served", len(preds))
 
@@ -501,7 +569,9 @@ async def dashboard():
     if _prob_calibration is None:
         raise HTTPException(status_code=503, detail="Probabilistic calibration not available")
 
-    resp = await get_probabilistic_predictions(days_ahead=1, dist_model="nb2", max_goals=20, thresholds=[6.5])
+    resp = await get_probabilistic_predictions(
+        days_ahead=1, dist_model="nb2", max_goals=20, thresholds=[6.5]
+    )
     rows = []
     for g in resp.predictions:
         rows.append(
@@ -576,6 +646,7 @@ async def get_live_predictions(
         _historical_df,
         thresholds=thresholds,
         max_goals=20,
+        artifact=_artifact,
     )
     preds: List[LiveGamePrediction] = []
     for _, row in live_df.iterrows():
@@ -658,7 +729,7 @@ async def live_dashboard():
             </tr>
           </thead>
           <tbody>
-            {''.join(rows) if rows else '<tr><td colspan="8">No games found.</td></tr>'}
+            {"".join(rows) if rows else '<tr><td colspan="8">No games found.</td></tr>'}
           </tbody>
         </table>
         <script>
@@ -700,3 +771,20 @@ async def get_model_summary():
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     return {"summary": _artifact.summary()}
+
+
+@app.get("/monitoring/summary")
+async def get_monitoring_summary():
+    """Realized proper scores and reference-backed drift for the production release."""
+    if _artifact is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    if _monitoring_ledger is None:
+        return {
+            "enabled": False,
+            "message": "Set NHL_MONITORING_LOG=1 to enable the SQLite prediction ledger.",
+        }
+    results = _historical_df if _historical_df is not None else pd.DataFrame()
+    return {
+        "enabled": True,
+        **monitoring_summary(_monitoring_ledger, results, _artifact),
+    }

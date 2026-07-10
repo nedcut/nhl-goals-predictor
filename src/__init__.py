@@ -41,9 +41,16 @@ __all__ = [
     "choose_champion",
     "per_game_weighted_scores",
     "compare_models_significance",
+    "compare_leader_to_all",
+    "select_champion_from_equivalence_set",
     # Significance
     "paired_bootstrap",
     "PairedComparison",
+    "holm_adjusted_p_values",
+    # Locked release benchmark
+    "BenchmarkProtocol",
+    "assess_benchmark_data",
+    "run_locked_benchmark",
     # Portfolio orchestration
     "run_portfolio_pipeline",
     # Baselines
@@ -88,8 +95,14 @@ _LAZY_ATTR_MODULES = {
     "choose_champion": ".champion",
     "per_game_weighted_scores": ".champion",
     "compare_models_significance": ".champion",
+    "compare_leader_to_all": ".champion",
+    "select_champion_from_equivalence_set": ".champion",
     "paired_bootstrap": ".significance",
     "PairedComparison": ".significance",
+    "holm_adjusted_p_values": ".significance",
+    "BenchmarkProtocol": ".benchmark",
+    "assess_benchmark_data": ".benchmark",
+    "run_locked_benchmark": ".benchmark",
     "run_portfolio_pipeline": ".portfolio",
     "TeamStrengthPoissonModel": ".team_strength",
     "TeamStrengthConfig": ".team_strength",

@@ -73,9 +73,7 @@ class MetricsRegistry:
                 route: {
                     "count": s.count,
                     "errors": s.errors,
-                    "avg_latency_ms": round(s.total_latency_ms / s.count, 2)
-                    if s.count
-                    else 0.0,
+                    "avg_latency_ms": round(s.total_latency_ms / s.count, 2) if s.count else 0.0,
                 }
                 for route, s in sorted(self._routes.items())
             }

@@ -21,7 +21,9 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -37,6 +39,14 @@ if TYPE_CHECKING:
     from .model import TrainingResult
 
 logger = get_logger(__name__)
+
+ARTIFACT_SCHEMA_VERSION = 2
+
+
+def feature_schema_hash(feature_names: List[str]) -> str:
+    """Stable digest of the ordered serving feature schema."""
+    payload = json.dumps(list(feature_names), separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _get_git_commit() -> Optional[str]:
@@ -86,6 +96,18 @@ class ModelMetadata:
     # Version control
     git_commit: Optional[str] = None
 
+    # Release-grade provenance and serving contract. Defaults preserve loading
+    # of schema-v1 artifacts, but validate_for_serving rejects incomplete ones.
+    schema_version: int = 1
+    benchmark_release: Optional[str] = None
+    data_fingerprint: Optional[str] = None
+    feature_schema_hash: Optional[str] = None
+    prediction_interface: str = "feature_matrix"
+    training_cohort: Dict[str, Any] = field(default_factory=dict)
+    holdout_metrics: Dict[str, float] = field(default_factory=dict)
+    monitoring_reference: Dict[str, Any] = field(default_factory=dict)
+    artifact_id: Optional[str] = None
+
     @classmethod
     def from_training_result(
         cls,
@@ -104,7 +126,9 @@ class ModelMetadata:
         n_training_samples : int, optional
             Number of training samples (if not provided, estimated from test size).
         """
-        improvement = (1 - result.mae / result.baseline_mae) * 100 if result.baseline_mae > 0 else 0.0
+        improvement = (
+            (1 - result.mae / result.baseline_mae) * 100 if result.baseline_mae > 0 else 0.0
+        )
 
         # Estimate training samples if not provided
         if n_training_samples is None:
@@ -138,6 +162,9 @@ class ModelMetadata:
             config_snapshot=config_dict,
             data_seasons=seasons or [],
             git_commit=_get_git_commit(),
+            schema_version=ARTIFACT_SCHEMA_VERSION,
+            feature_schema_hash=feature_schema_hash(result.feature_names),
+            prediction_interface="feature_matrix",
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -148,6 +175,36 @@ class ModelMetadata:
     def from_dict(cls, data: Dict[str, Any]) -> "ModelMetadata":
         """Create metadata from dictionary."""
         return cls(**data)
+
+    def serving_validation_errors(self) -> List[str]:
+        """Return release-contract violations that make serving unsafe."""
+        errors: List[str] = []
+        if self.schema_version < ARTIFACT_SCHEMA_VERSION:
+            errors.append(
+                f"artifact schema {self.schema_version} is older than required "
+                f"{ARTIFACT_SCHEMA_VERSION}"
+            )
+        if not self.benchmark_release:
+            errors.append("benchmark_release is missing")
+        if not self.data_fingerprint:
+            errors.append("data_fingerprint is missing")
+        if not self.git_commit:
+            errors.append("git_commit is missing")
+        if self.training_date == "unknown":
+            errors.append("training_date is unknown")
+        if not self.data_seasons:
+            errors.append("data_seasons is empty")
+        for name in ("mae", "rmse", "baseline_mae"):
+            if not math.isfinite(float(getattr(self, name))):
+                errors.append(f"{name} is not finite")
+        if self.prediction_interface not in {"feature_matrix", "game_frame"}:
+            errors.append(f"unknown prediction_interface={self.prediction_interface!r}")
+        expected_hash = feature_schema_hash(self.feature_names)
+        if self.feature_schema_hash != expected_hash:
+            errors.append("feature_schema_hash does not match ordered feature_names")
+        if self.prediction_interface == "feature_matrix" and not self.feature_names:
+            errors.append("feature_matrix artifact has no feature_names")
+        return errors
 
 
 class ModelArtifact:
@@ -260,6 +317,12 @@ class ModelArtifact:
         logger.info("Loaded model artifact from %s", path)
         return cls(model=model, metadata=metadata)
 
+    def validate_for_serving(self) -> None:
+        """Raise when the artifact lacks the release provenance required by the API."""
+        errors = self.metadata.serving_validation_errors()
+        if errors:
+            raise ValueError("Artifact is not release-grade: " + "; ".join(errors))
+
     @staticmethod
     def _metadata_from_legacy(model_obj: Any) -> ModelMetadata:
         """Build minimal metadata for legacy model files without JSON metadata."""
@@ -294,6 +357,9 @@ class ModelArtifact:
             config_snapshot={},
             data_seasons=[],
             git_commit=_get_git_commit(),
+            schema_version=1,
+            feature_schema_hash=feature_schema_hash(feature_names),
+            prediction_interface="feature_matrix",
         )
 
     def predict(self, X) -> Any:
@@ -309,6 +375,11 @@ class ModelArtifact:
         array-like
             Predictions.
         """
+        if self.metadata.prediction_interface == "game_frame":
+            if not hasattr(self.model, "predict_mu"):
+                raise ValueError("game_frame artifact model does not implement predict_mu")
+            return self.model.predict_mu(X)
+
         # Backward compatibility: older Poisson/Ensemble artifacts stored a scaler
         # on the estimator instance instead of using an sklearn Pipeline.
         if hasattr(self.model, "_scaler"):

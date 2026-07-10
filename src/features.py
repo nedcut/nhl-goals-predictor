@@ -37,9 +37,7 @@ from .validation import validate_game_data
 logger = get_logger(__name__)
 
 
-def feature_fill_values(
-    frame: pd.DataFrame, columns: Iterable[str]
-) -> Dict[str, float]:
+def feature_fill_values(frame: pd.DataFrame, columns: Iterable[str]) -> Dict[str, float]:
     """Compute training-representative fill values for ``columns``.
 
     Uses the median of each column over ``frame`` (a historical / training
@@ -205,18 +203,26 @@ def _compute_rolling_features(team_log: pd.DataFrame, window: int = 5) -> pd.Dat
     team_log["home_win_pct"] = np.where(
         team_log["home_games_roll"] > 0,
         team_log["home_wins_roll"] / team_log["home_games_roll"],
-        0.5
+        0.5,
     )
     team_log["away_win_pct"] = np.where(
         team_log["away_games_roll"] > 0,
         team_log["away_wins_roll"] / team_log["away_games_roll"],
-        0.5
+        0.5,
     )
 
     # Clean up intermediate columns
-    drop_cols = ["home_win", "away_win", "home_game", "away_game",
-                 "home_wins_roll", "home_games_roll", "away_wins_roll",
-                 "away_games_roll", "prev_game_date"]
+    drop_cols = [
+        "home_win",
+        "away_win",
+        "home_game",
+        "away_game",
+        "home_wins_roll",
+        "home_games_roll",
+        "away_wins_roll",
+        "away_games_roll",
+        "prev_game_date",
+    ]
     team_log = team_log.drop(columns=drop_cols)
 
     return team_log
@@ -617,9 +623,7 @@ def add_features(
 
     # Compute multi-window rolling features if enabled
     if include_multi_window:
-        team_log = _compute_multi_window_rolling(
-            team_log, windows=config.features.rolling_windows
-        )
+        team_log = _compute_multi_window_rolling(team_log, windows=config.features.rolling_windows)
         logger.debug("Added multi-window features for windows: %s", config.features.rolling_windows)
 
     # Add optional rolling xG features
@@ -642,18 +646,32 @@ def add_features(
             raise RuntimeError("xG features were required but no xG rows matched the game data")
 
     # Base feature columns (from primary window)
-    feature_cols = ["avg_GF", "avg_GA", "avg_total", "win_pct", "rest_days",
-                    "is_back_to_back", "win_streak", "home_win_pct", "away_win_pct"]
+    feature_cols = [
+        "avg_GF",
+        "avg_GA",
+        "avg_total",
+        "win_pct",
+        "rest_days",
+        "is_back_to_back",
+        "win_streak",
+        "home_win_pct",
+        "away_win_pct",
+    ]
 
     # Add multi-window feature columns
     multi_window_cols = []
     if include_multi_window:
         for w in config.features.rolling_windows:
             suffix = f"_{w}g"
-            multi_window_cols.extend([
-                f"avg_GF{suffix}", f"avg_GA{suffix}", f"avg_total{suffix}",
-                f"win_pct{suffix}", f"std_GF{suffix}"
-            ])
+            multi_window_cols.extend(
+                [
+                    f"avg_GF{suffix}",
+                    f"avg_GA{suffix}",
+                    f"avg_total{suffix}",
+                    f"win_pct{suffix}",
+                    f"std_GF{suffix}",
+                ]
+            )
 
     xg_cols = []
     if include_xg:
@@ -696,6 +714,7 @@ def add_features(
     if include_goalies:
         try:
             from .goalies import add_goalie_features
+
             df_out = add_goalie_features(df_out, fetch_missing=False)
         except Exception as e:
             logger.warning("Could not add goalie features: %s", e)

@@ -103,7 +103,10 @@ def test_add_features_include_xg_no_leakage(sample_game_data, tmp_path: Path):
 
     # No leakage: first game for a team should not use current-game xG history.
     first_row = feat.sort_values("date").iloc[0]
-    assert pd.isna(first_row["home_avg_xGF_5g"]) or first_row["home_avg_xGF_5g"] != first_row["homeScore"] + 0.5
+    assert (
+        pd.isna(first_row["home_avg_xGF_5g"])
+        or first_row["home_avg_xGF_5g"] != first_row["homeScore"] + 0.5
+    )
 
 
 def test_add_features_can_require_xg(sample_game_data, monkeypatch):

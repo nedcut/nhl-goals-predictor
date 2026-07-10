@@ -9,6 +9,7 @@ from src.champion import (
     SELECTION_POLICY,
     choose_champion,
     rank_candidates,
+    select_champion_from_equivalence_set,
     select_champion_with_significance,
     weighted_score,
     write_champion_reports,
@@ -50,12 +51,7 @@ def test_weighted_score_matches_formula():
     metrics = {"mae": 1.8, "crps": 1.2, "dist_nll": 2.1, "over_brier": 0.24}
     baseline = {"mae": 2.0, "crps": 1.5, "dist_nll": 2.5, "over_brier": 0.30}
     score = weighted_score(metrics, baseline)
-    expected = (
-        0.35 * (1.8 / 2.0)
-        + 0.30 * (1.2 / 1.5)
-        + 0.20 * (2.1 / 2.5)
-        + 0.15 * (0.24 / 0.30)
-    )
+    expected = 0.35 * (1.8 / 2.0) + 0.30 * (1.2 / 1.5) + 0.20 * (2.1 / 2.5) + 0.15 * (0.24 / 0.30)
     assert score == pytest.approx(expected, rel=1e-10)
 
 
@@ -126,6 +122,33 @@ def test_select_keeps_complex_when_significant():
     assert selection["raw_score_leader"]["model"] == "xgb_tuned"
     assert selection["demoted"] is False
     assert "significant" in selection["rationale"].lower()
+
+
+def test_full_equivalence_set_prefers_simplest_not_just_runner_up():
+    ranking = rank_candidates(
+        {
+            "team_strength": _metrics(2.0, 1.5, 2.5, 0.30),
+            "xgb_tuned": _metrics(1.70, 1.15, 1.95, 0.22),
+            "xgb_current": _metrics(1.71, 1.16, 1.96, 0.22),
+            "double_poisson": _metrics(1.72, 1.17, 1.97, 0.23),
+        }
+    )
+    comparisons = [
+        {"candidate": row["model"], "significant_adjusted": False} for row in ranking[1:]
+    ]
+    selection = select_champion_from_equivalence_set(
+        ranking,
+        comparisons,
+        score_reason="Lowest weighted score.",
+    )
+    assert selection["raw_score_leader"]["model"] == "xgb_tuned"
+    assert selection["champion"]["model"] == "team_strength"
+    assert set(selection["equivalence_set"]) == {
+        "xgb_tuned",
+        "xgb_current",
+        "double_poisson",
+        "team_strength",
+    }
 
 
 def test_write_champion_reports_without_per_game_uses_score_only(tmp_path: Path):

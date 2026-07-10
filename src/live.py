@@ -31,7 +31,9 @@ def parse_clock_to_minutes(clock: str | None) -> float:
     return minutes + (seconds / 60.0)
 
 
-def remaining_minutes_from_state(period: int | None, clock: str | None, game_state: str | None) -> float:
+def remaining_minutes_from_state(
+    period: int | None, clock: str | None, game_state: str | None
+) -> float:
     """Estimate game minutes remaining from period + clock."""
     state = (game_state or "").upper()
     if state in {"OFF", "FINAL"}:
@@ -86,7 +88,9 @@ def apply_live_residual_update(
             "mu_live": float(min(current_total, max_goals)),
         }
 
-    rem_pmf = nb2_pmf_matrix(np.array([mu_remaining]), alpha=float(alpha_calibrated), max_goals=max_goals)[0]
+    rem_pmf = nb2_pmf_matrix(
+        np.array([mu_remaining]), alpha=float(alpha_calibrated), max_goals=max_goals
+    )[0]
     final_pmf = np.zeros(max_goals + 1, dtype=float)
     for rem_goals, p in enumerate(rem_pmf):
         final_goals = current_total + rem_goals
@@ -131,7 +135,9 @@ def parse_gamecenter_payload(game_pk: int, payload: dict[str, Any]) -> dict[str,
     home_score = _safe_nested(payload, "homeTeam", "score", default=0)
     away_score = _safe_nested(payload, "awayTeam", "score", default=0)
 
-    remaining_minutes = remaining_minutes_from_state(int(period or 1), str(clock) if clock else None, game_state)
+    remaining_minutes = remaining_minutes_from_state(
+        int(period or 1), str(clock) if clock else None, game_state
+    )
 
     return {
         "gamePk": int(game_pk),

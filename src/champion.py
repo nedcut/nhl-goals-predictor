@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from .significance import PairedComparison, paired_bootstrap
+from .significance import PairedComparison, holm_adjusted_p_values, paired_bootstrap
 
 WEIGHTS = {
     "mae": 0.35,
@@ -28,7 +28,7 @@ MODEL_COMPLEXITY = {
     "xgb_tuned": 4,
 }
 _DEFAULT_COMPLEXITY = 100
-SELECTION_POLICY = "significance_prefer_simpler"
+SELECTION_POLICY = "blocked_holm_equivalence_prefer_simpler"
 
 # Maps weighted-score component -> the per-game array key produced by
 # time_series_cv_forecast (CVForecastResult.per_game).
@@ -209,7 +209,113 @@ def compare_models_significance(
 
     a = np.array([scores_a[k] for k in shared], dtype=float)
     b = np.array([scores_b[k] for k in shared], dtype=float)
-    return paired_bootstrap(a, b, name_a=name_a, name_b=name_b, n_boot=n_boot, seed=seed)
+    groups = None
+    if "block_key" in per_game_a:
+        block_map = {
+            str(key): str(block)
+            for key, block in zip(per_game_a["game_key"], per_game_a["block_key"])
+        }
+        if all(key in block_map for key in shared):
+            groups = [block_map[key] for key in shared]
+    return paired_bootstrap(
+        a,
+        b,
+        name_a=name_a,
+        name_b=name_b,
+        n_boot=n_boot,
+        seed=seed,
+        groups=groups,
+    )
+
+
+def compare_leader_to_all(
+    ranking: list[dict[str, Any]],
+    per_game_map: Dict[str, Dict[str, Any]],
+    baseline: Dict[str, float],
+    *,
+    alpha: float = 0.05,
+    n_boot: int = 5000,
+    seed: int = 42,
+) -> list[dict[str, Any]]:
+    """Compare the score leader with every candidate using Holm adjustment."""
+    leader = ranking[0]["model"]
+    if leader not in per_game_map:
+        return []
+    rows: list[dict[str, Any]] = []
+    for candidate in ranking[1:]:
+        name = candidate["model"]
+        if name not in per_game_map:
+            continue
+        comparison = compare_models_significance(
+            per_game_map[leader],
+            per_game_map[name],
+            baseline,
+            name_a=leader,
+            name_b=name,
+            n_boot=n_boot,
+            seed=seed,
+        )
+        if comparison is not None:
+            rows.append({"candidate": name, "comparison": comparison})
+
+    adjusted = holm_adjusted_p_values(row["comparison"].p_value for row in rows)
+    output: list[dict[str, Any]] = []
+    for row, p_adjusted in zip(rows, adjusted):
+        comparison = row["comparison"]
+        payload = comparison.to_dict()
+        payload.update(
+            {
+                "candidate": row["candidate"],
+                "p_value_adjusted": float(p_adjusted),
+                "significant_adjusted": bool(p_adjusted < alpha),
+                "alpha": alpha,
+                "adjustment": "holm-bonferroni",
+            }
+        )
+        output.append(payload)
+    return output
+
+
+def select_champion_from_equivalence_set(
+    ranking: list[dict[str, Any]],
+    comparisons: list[dict[str, Any]],
+    *,
+    score_reason: str,
+) -> dict[str, Any]:
+    """Choose the simplest candidate not distinguishable from the score leader."""
+    raw_leader = ranking[0]
+    equivalent_names = {raw_leader["model"]}
+    for comparison in comparisons:
+        if not comparison["significant_adjusted"]:
+            equivalent_names.add(comparison["candidate"])
+
+    equivalent = [row for row in ranking if row["model"] in equivalent_names]
+    champion = min(
+        equivalent,
+        key=lambda row: (
+            model_complexity(row["model"]),
+            row["weighted_score"],
+            row["mae"],
+        ),
+    )
+    demoted = champion["model"] != raw_leader["model"]
+    if comparisons:
+        rationale = (
+            f"{score_reason} Week-block bootstrap comparisons against every candidate "
+            f"used Holm adjustment; the indistinguishable set was "
+            f"{', '.join(row['model'] for row in equivalent)}. Preferring the simpler "
+            f"candidate selects `{champion['model']}`."
+        )
+    else:
+        rationale = f"{score_reason} No complete paired comparison set was available."
+    return {
+        "champion": champion,
+        "raw_score_leader": raw_leader,
+        "demoted": demoted,
+        "rationale": rationale,
+        "selection_policy": SELECTION_POLICY,
+        "equivalence_set": [row["model"] for row in equivalent],
+    }
 
 
 def write_champion_reports(
@@ -232,27 +338,18 @@ def write_champion_reports(
     output_dir.mkdir(parents=True, exist_ok=True)
     decision = choose_champion(candidates)
     ranking = decision["ranking"]
-    provisional_name = decision["winner"]["model"]
     runner = ranking[1] if len(ranking) > 1 else None
 
-    # Significance is always computed on the score leader vs score runner-up
-    # (the provisional comparison), even if we later demote the champion.
-    significance: Optional[PairedComparison] = None
+    comparisons: list[dict[str, Any]] = []
     if per_game_map and runner is not None and baseline_name in candidates:
-        runner_name = runner["model"]
-        if provisional_name in per_game_map and runner_name in per_game_map:
-            significance = compare_models_significance(
-                per_game_map[provisional_name],
-                per_game_map[runner_name],
-                candidates[baseline_name],
-                name_a=provisional_name,
-                name_b=runner_name,
-            )
+        comparisons = compare_leader_to_all(
+            ranking,
+            per_game_map,
+            candidates[baseline_name],
+        )
 
-    selection = select_champion_with_significance(
-        ranking,
-        significance,
-        score_reason=decision["reason"],
+    selection = select_champion_from_equivalence_set(
+        ranking, comparisons, score_reason=decision["reason"]
     )
     champion = selection["champion"]
     raw_score_leader = selection["raw_score_leader"]
@@ -267,7 +364,9 @@ def write_champion_reports(
         "raw_score_leader": raw_score_leader,
         "rationale": selection["rationale"],
         "selection_policy": selection["selection_policy"],
-        "champion_vs_runner_up": significance.to_dict() if significance else None,
+        "equivalence_set": selection["equivalence_set"],
+        "leader_comparisons": comparisons,
+        "champion_vs_runner_up": comparisons[0] if comparisons else None,
     }
 
     json_path = output_dir / "champion_model_report.json"
@@ -290,12 +389,16 @@ def write_champion_reports(
         f"## Statistical Significance (score leader vs runner-up: "
         f"{raw_score_leader['model']} vs {score_runner})",
     ]
+    significance = comparisons[0] if comparisons else None
     if significance is not None:
         sig_lines.append(
-            f"- Paired bootstrap over {significance.n_games} shared games "
-            f"({'SIGNIFICANT' if significance.significant else 'NOT significant'} at 95%)."
+            f"- Week-block bootstrap over {significance['n_games']} shared games and "
+            f"{significance.get('n_blocks', 'n/a')} weeks; Holm-adjusted across all candidates."
         )
-        sig_lines.append(f"- {significance.verdict}")
+        sig_lines.append(
+            f"- Raw p={significance['p_value']:.3f}; adjusted "
+            f"p={significance['p_value_adjusted']:.3f}."
+        )
     else:
         sig_lines.append("- Not computed (per-game scores unavailable or models not paired).")
 
@@ -305,6 +408,7 @@ def write_champion_reports(
         f"- Selection policy: `{SELECTION_POLICY}`",
         f"- Champion: **{champion['model']}**",
         f"- Weighted-score leader: **{raw_score_leader['model']}**",
+        f"- Indistinguishable set: **{', '.join(selection['equivalence_set'])}**",
         f"- Rationale: {selection['rationale']}",
     ]
     if selection["demoted"]:
@@ -320,8 +424,9 @@ def write_champion_reports(
             "## Weighted Probabilistic Objective",
             "- Score = 0.35*(MAE/base) + 0.30*(CRPS/base) + 0.20*(Dist NLL/base) + 0.15*(Brier/base)",
             f"- Baseline: {baseline_name}",
-            f"- Selection policy: when the score-leader vs runner-up margin is not "
-            f"significant, prefer the simpler model (`{SELECTION_POLICY}`).",
+            f"- Selection policy: compare the score leader against every candidate with "
+            f"week-block bootstrap and Holm adjustment, then prefer the simplest model "
+            f"in the indistinguishable set (`{SELECTION_POLICY}`).",
             "",
             "## Candidate Ranking",
             "| Model | Weighted Score | MAE (±fold std) | CRPS | Dist NLL | Brier (>6.5) |",

@@ -116,7 +116,7 @@ def _compute_backoff(
                 # Retry-After may be an HTTP-date; fall through to computed backoff.
                 pass
 
-    ceiling = min(max_backoff, backoff_factor * (2 ** attempt))
+    ceiling = min(max_backoff, backoff_factor * (2**attempt))
     return random.uniform(0, ceiling)
 
 
@@ -146,9 +146,7 @@ def request(
     sess = session or get_session()
     timeout = timeout if timeout is not None else config.data.request_timeout
     max_retries = max_retries if max_retries is not None else config.data.max_retries
-    backoff_factor = (
-        backoff_factor if backoff_factor is not None else config.data.backoff_factor
-    )
+    backoff_factor = backoff_factor if backoff_factor is not None else config.data.backoff_factor
     max_backoff = config.data.max_backoff_seconds
     retries_allowed = method.upper() in RETRYABLE_METHODS
 
@@ -160,13 +158,21 @@ def request(
             if not retries_allowed or attempt >= max_retries:
                 logger.warning(
                     "%s %s failed after %d attempt(s): %s",
-                    method, url, attempt + 1, exc,
+                    method,
+                    url,
+                    attempt + 1,
+                    exc,
                 )
                 raise
             delay = _compute_backoff(None, attempt, backoff_factor, max_backoff)
             logger.info(
                 "%s %s errored (%s); retry %d/%d in %.2fs",
-                method, url, exc, attempt + 1, max_retries, delay,
+                method,
+                url,
+                exc,
+                attempt + 1,
+                max_retries,
+                delay,
             )
             sleep(delay)
             continue
@@ -176,7 +182,12 @@ def request(
             delay = _compute_backoff(response, attempt, backoff_factor, max_backoff)
             logger.info(
                 "%s %s returned %d; retry %d/%d in %.2fs",
-                method, url, response.status_code, attempt + 1, max_retries, delay,
+                method,
+                url,
+                response.status_code,
+                attempt + 1,
+                max_retries,
+                delay,
             )
             response.close()
             sleep(delay)

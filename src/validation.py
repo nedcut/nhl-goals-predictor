@@ -111,8 +111,7 @@ def validate_features(df: pd.DataFrame) -> None:
         raise ValidationError("DataFrame is empty")
 
     feature_cols = [
-        col for col in df.columns
-        if any(col.startswith(prefix) for prefix in FEATURE_PREFIXES)
+        col for col in df.columns if any(col.startswith(prefix) for prefix in FEATURE_PREFIXES)
     ]
 
     if not feature_cols:
@@ -164,9 +163,7 @@ def validate_seasons(seasons: Iterable[str]) -> None:
             raise ValidationError(f"Season must be a string, got {type(season).__name__}")
 
         if len(season) != 8:
-            raise ValidationError(
-                f"Season '{season}' must be 8 characters (e.g., '20232024')"
-            )
+            raise ValidationError(f"Season '{season}' must be 8 characters (e.g., '20232024')")
 
         if not season.isdigit():
             raise ValidationError(f"Season '{season}' must contain only digits")
@@ -176,8 +173,7 @@ def validate_seasons(seasons: Iterable[str]) -> None:
 
         if end_year != start_year + 1:
             raise ValidationError(
-                f"Season '{season}' must span consecutive years "
-                f"(got {start_year} to {end_year})"
+                f"Season '{season}' must span consecutive years (got {start_year} to {end_year})"
             )
 
 

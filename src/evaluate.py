@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from .data import build_dataset
+from .decision import evaluate_decisions, write_decision_report
 from .evaluation import time_series_cv_forecast
 from .features import add_features
 from .logging_config import setup_logging
@@ -44,6 +45,7 @@ def _plot_reliability(bins, *, title: str, out_path: Path) -> None:
     plt.savefig(out_path, dpi=160)
     plt.close()
 
+
 def _plot_pit(pit: list[float], *, title: str, out_path: Path) -> None:
     plt.figure(figsize=(7, 4))
     plt.hist(pit, bins=20, range=(0, 1), density=True, alpha=0.8, edgecolor="white")
@@ -58,14 +60,18 @@ def _plot_pit(pit: list[float], *, title: str, out_path: Path) -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> None:
-    parser = argparse.ArgumentParser(description="Evaluate probabilistic forecasts with time-series CV")
+    parser = argparse.ArgumentParser(
+        description="Evaluate probabilistic forecasts with time-series CV"
+    )
     parser.add_argument("--seasons", nargs="+", default=["20232024", "20242025"])
     parser.add_argument(
         "--point-model",
         choices=["xgb", "poisson_glm", "team_strength", "double_poisson"],
         default="xgb",
     )
-    parser.add_argument("--dist-model", choices=["poisson", "nb2", "poisson_mixture"], default="nb2")
+    parser.add_argument(
+        "--dist-model", choices=["poisson", "nb2", "poisson_mixture"], default="nb2"
+    )
     parser.add_argument(
         "--threshold",
         type=float,
@@ -82,8 +88,17 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--splits", type=int, default=5)
     parser.add_argument("--cal-fraction", type=float, default=0.2)
     parser.add_argument("--max-goals", type=int, default=20)
-    parser.add_argument("--include-xg", action="store_true", help="Include MoneyPuck xG features when available")
-    parser.add_argument("--diagnostics", action="store_true", help="Save fold-level diagnostics CSV")
+    parser.add_argument(
+        "--include-xg", action="store_true", help="Include MoneyPuck xG features when available"
+    )
+    parser.add_argument(
+        "--diagnostics", action="store_true", help="Save fold-level diagnostics CSV"
+    )
+    parser.add_argument(
+        "--decision-eval",
+        action="store_true",
+        help="Opt in to base-rate decision diagnostics (not a sportsbook backtest)",
+    )
     parser.add_argument("--outdir", type=Path, default=Path("reports"))
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
@@ -158,7 +173,9 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     # Always keep a primary-threshold plot name even if thresholds omitted it
     primary_label = _threshold_label(args.threshold)
-    primary_plot = outdir / f"reliability_over_{primary_label}_{args.point_model}_{args.dist_model}.png"
+    primary_plot = (
+        outdir / f"reliability_over_{primary_label}_{args.point_model}_{args.dist_model}.png"
+    )
     if primary_plot not in plot_paths:
         _plot_reliability(
             result.reliability_bins,
@@ -178,6 +195,17 @@ def main(argv: Optional[list[str]] = None) -> None:
         diag_path = outdir / f"diagnostics_{args.point_model}_{args.dist_model}.csv"
         pd.DataFrame(result.diagnostics).to_csv(diag_path, index=False)
         print(f"- {diag_path}")
+
+    if args.decision_eval and result.per_game is not None:
+        decision = evaluate_decisions(
+            result.per_game["p_over"],
+            result.per_game["y_over"],
+            reference_p_over=result.per_game["reference_p_over"],
+            block_keys=result.per_game["block_key"],
+        )
+        write_decision_report(decision, outdir)
+        print(f"- {outdir / 'decision_eval.json'}")
+        print(f"- {outdir / 'decision_eval.md'}")
 
     saved_lines = [str(metrics_path), *(str(p) for p in plot_paths), str(pit_path)]
     print("\nSaved:\n" + "\n".join(f"- {p}" for p in saved_lines))

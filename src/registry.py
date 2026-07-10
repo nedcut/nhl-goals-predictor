@@ -59,6 +59,7 @@ class ModelRegistry:
                 self.registry = json.load(f)
         else:
             self.registry = {
+                "schema_version": 2,
                 "models": [],
                 "production": None,
                 "created_at": datetime.now().isoformat(),
@@ -108,7 +109,7 @@ class ModelRegistry:
         entry = {
             "version": version,
             "name": name,
-            "path": str(model_path),
+            "path": version,
             "registered_at": datetime.now().isoformat(),
             "description": description,
             "model_type": artifact.metadata.model_type,
@@ -119,6 +120,9 @@ class ModelRegistry:
             "n_features": len(artifact.metadata.feature_names),
             "data_seasons": artifact.metadata.data_seasons,
             "git_commit": artifact.metadata.git_commit,
+            "benchmark_release": artifact.metadata.benchmark_release,
+            "data_fingerprint": artifact.metadata.data_fingerprint,
+            "artifact_schema_version": artifact.metadata.schema_version,
         }
 
         self.registry["models"].append(entry)
@@ -132,7 +136,17 @@ class ModelRegistry:
 
         return version
 
-    def get_production_model(self) -> Optional[ModelArtifact]:
+    def _entry_path(self, entry: Dict[str, Any]) -> Path:
+        path = Path(entry["path"])
+        if path.is_absolute():
+            return path
+        if path.exists() or path.parent == self.base_path:
+            return path
+        return self.base_path / path
+
+    def get_production_model(
+        self, *, require_release_grade: bool = False
+    ) -> Optional[ModelArtifact]:
         """Load the current production model.
 
         Returns
@@ -147,7 +161,10 @@ class ModelRegistry:
         version = self.registry["production"]
         for entry in self.registry["models"]:
             if entry["version"] == version:
-                return ModelArtifact.load(Path(entry["path"]))
+                artifact = ModelArtifact.load(self._entry_path(entry))
+                if require_release_grade:
+                    artifact.validate_for_serving()
+                return artifact
 
         logger.error("Production model %s not found in registry", version)
         return None
@@ -167,7 +184,7 @@ class ModelRegistry:
         """
         for entry in self.registry["models"]:
             if entry["version"] == version:
-                return ModelArtifact.load(Path(entry["path"]))
+                return ModelArtifact.load(self._entry_path(entry))
 
         logger.warning("Model version %s not found", version)
         return None

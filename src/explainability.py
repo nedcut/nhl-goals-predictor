@@ -46,7 +46,9 @@ def xgb_gain_importance(model) -> pd.Series:
     return pd.Series(score).sort_values(ascending=False)
 
 
-def permutation_importance_df(model, X: pd.DataFrame, y: pd.Series, *, n_repeats: int = 5) -> pd.Series:
+def permutation_importance_df(
+    model, X: pd.DataFrame, y: pd.Series, *, n_repeats: int = 5
+) -> pd.Series:
     """Permutation importance as a fallback explanation method."""
     result = permutation_importance(
         model,

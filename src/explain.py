@@ -27,7 +27,9 @@ from .logging_config import setup_logging
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Explainability and feature stability tools")
     parser.add_argument("--seasons", nargs="+", default=["20232024", "20242025"])
-    parser.add_argument("--model", type=Path, default=None, help="Optional model artifact path (without extension)")
+    parser.add_argument(
+        "--model", type=Path, default=None, help="Optional model artifact path (without extension)"
+    )
     parser.add_argument("--outdir", type=Path, default=Path("reports/explain"))
     parser.add_argument("--shap-sample", type=int, default=500, help="Max rows for SHAP")
     parser.add_argument("--skip-shap", action="store_true")

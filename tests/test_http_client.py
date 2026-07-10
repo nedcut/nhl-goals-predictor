@@ -77,16 +77,16 @@ def test_succeeds_first_try_makes_one_call():
 
 
 def test_retries_on_retryable_status_then_succeeds():
-    session = FakeSession([
-        FakeResponse(503),
-        FakeResponse(503),
-        FakeResponse(200, json_data={"ok": True}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(503),
+            FakeResponse(503),
+            FakeResponse(200, json_data={"ok": True}),
+        ]
+    )
     sleeps, sleep = _no_sleep()
 
-    resp = http_client.request(
-        "GET", "http://x", session=session, sleep=sleep, max_retries=3
-    )
+    resp = http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=3)
 
     assert resp.status_code == 200
     assert len(session.calls) == 3  # 2 failures + 1 success
@@ -94,15 +94,15 @@ def test_retries_on_retryable_status_then_succeeds():
 
 
 def test_retries_on_connection_error_then_succeeds():
-    session = FakeSession([
-        requests.ConnectionError("boom"),
-        FakeResponse(200, json_data={"ok": True}),
-    ])
+    session = FakeSession(
+        [
+            requests.ConnectionError("boom"),
+            FakeResponse(200, json_data={"ok": True}),
+        ]
+    )
     sleeps, sleep = _no_sleep()
 
-    resp = http_client.request(
-        "GET", "http://x", session=session, sleep=sleep, max_retries=2
-    )
+    resp = http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=2)
 
     assert resp.status_code == 200
     assert len(session.calls) == 2
@@ -115,9 +115,7 @@ def test_exhausts_retries_and_returns_last_bad_response():
     session = FakeSession([FakeResponse(500) for _ in range(4)])
     sleeps, sleep = _no_sleep()
 
-    resp = http_client.request(
-        "GET", "http://x", session=session, sleep=sleep, max_retries=3
-    )
+    resp = http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=3)
 
     assert resp.status_code == 500
     assert len(session.calls) == 4  # initial + 3 retries
@@ -131,9 +129,7 @@ def test_exhausts_retries_on_connection_error_and_raises():
     sleeps, sleep = _no_sleep()
 
     with pytest.raises(requests.ConnectionError):
-        http_client.request(
-            "GET", "http://x", session=session, sleep=sleep, max_retries=3
-        )
+        http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=3)
     assert len(session.calls) == 4
 
 
@@ -141,9 +137,7 @@ def test_non_retryable_4xx_is_not_retried():
     session = FakeSession([FakeResponse(404)])
     sleeps, sleep = _no_sleep()
 
-    resp = http_client.request(
-        "GET", "http://x", session=session, sleep=sleep, max_retries=3
-    )
+    resp = http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=3)
 
     assert resp.status_code == 404
     assert len(session.calls) == 1  # 404 is a client error; no retry
@@ -154,9 +148,7 @@ def test_non_idempotent_method_is_not_retried():
     session = FakeSession([FakeResponse(503), FakeResponse(200)])
     sleeps, sleep = _no_sleep()
 
-    resp = http_client.request(
-        "POST", "http://x", session=session, sleep=sleep, max_retries=3
-    )
+    resp = http_client.request("POST", "http://x", session=session, sleep=sleep, max_retries=3)
 
     # POST is not in RETRYABLE_METHODS, so the 503 is returned without retry.
     assert resp.status_code == 503
@@ -164,10 +156,12 @@ def test_non_idempotent_method_is_not_retried():
 
 
 def test_retry_after_header_overrides_backoff():
-    session = FakeSession([
-        FakeResponse(429, headers={"Retry-After": "7"}),
-        FakeResponse(200),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(429, headers={"Retry-After": "7"}),
+            FakeResponse(200),
+        ]
+    )
     sleeps, sleep = _no_sleep()
 
     http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=2)
@@ -177,10 +171,12 @@ def test_retry_after_header_overrides_backoff():
 
 def test_retry_after_is_capped_at_max_backoff(monkeypatch):
     monkeypatch.setattr(http_client.config.data, "max_backoff_seconds", 5.0)
-    session = FakeSession([
-        FakeResponse(429, headers={"Retry-After": "9999"}),
-        FakeResponse(200),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(429, headers={"Retry-After": "9999"}),
+            FakeResponse(200),
+        ]
+    )
     sleeps, sleep = _no_sleep()
 
     http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=2)
@@ -188,15 +184,15 @@ def test_retry_after_is_capped_at_max_backoff(monkeypatch):
     assert sleeps == [5.0]
 
 
-
-
 def test_negative_retry_after_is_clamped_to_zero(monkeypatch):
     """A malicious/broken Retry-After must not raise ValueError in sleep()."""
     monkeypatch.setattr(http_client.config.data, "max_backoff_seconds", 5.0)
-    session = FakeSession([
-        FakeResponse(429, headers={"Retry-After": "-3"}),
-        FakeResponse(200),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(429, headers={"Retry-After": "-3"}),
+            FakeResponse(200),
+        ]
+    )
     sleeps, sleep = _no_sleep()
 
     http_client.request("GET", "http://x", session=session, sleep=sleep, max_retries=2)
@@ -213,8 +209,12 @@ def test_backoff_is_bounded_and_grows(monkeypatch):
     sleeps, sleep = _no_sleep()
 
     http_client.request(
-        "GET", "http://x", session=session, sleep=sleep,
-        max_retries=3, backoff_factor=1.0,
+        "GET",
+        "http://x",
+        session=session,
+        sleep=sleep,
+        max_retries=3,
+        backoff_factor=1.0,
     )
 
     # ceilings: 1*2^0, 1*2^1, 1*2^2 = 1, 2, 4
