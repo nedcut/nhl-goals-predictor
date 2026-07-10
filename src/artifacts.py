@@ -32,6 +32,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import joblib
 
+try:
+    import xgboost as xgb
+    HAS_XGBOOST = True
+except ImportError:
+    HAS_XGBOOST = False
+
 from .config import config
 from .logging_config import get_logger
 
@@ -47,6 +53,36 @@ def feature_schema_hash(feature_names: List[str]) -> str:
     """Stable digest of the ordered serving feature schema."""
     payload = json.dumps(list(feature_names), separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+# Plausible range for an XGBoost total-goals regressor's learned intercept
+# (base_score ≈ mean total goals per game, ~6). A value outside this range means
+# the intercept was lost — the known failure mode when a pickled model crosses
+# an XGBoost version boundary and base_score silently resets to 0.5.
+_XGB_SANE_BASE_SCORE = (2.0, 12.0)
+
+
+def _is_xgboost_model(model: Any) -> bool:
+    """True if the model is an XGBoost sklearn-wrapper estimator."""
+    return HAS_XGBOOST and isinstance(model, xgb.XGBModel)
+
+
+def _check_xgb_base_score(model: Any, path: Path) -> None:
+    """Reject XGBoost regressors whose learned intercept is implausible."""
+    if not isinstance(model, xgb.XGBRegressor):
+        return
+    learner_param = json.loads(model.get_booster().save_config())["learner"][
+        "learner_model_param"
+    ]
+    base_score = float(learner_param["base_score"])
+    lo, hi = _XGB_SANE_BASE_SCORE
+    if not lo <= base_score <= hi:
+        raise ValueError(
+            f"Model at {path} has base_score={base_score}, outside the plausible "
+            f"total-goals range [{lo}, {hi}]. The intercept was likely lost by "
+            "unpickling across an XGBoost version boundary; retrain and re-save "
+            "the artifact."
+        )
 
 
 def _get_git_commit() -> Optional[str]:
@@ -264,6 +300,11 @@ class ModelArtifact:
         - {path}.joblib: The trained model
         - {path}.json: The metadata
 
+        For XGBoost models a third file, {path}.ubj, is written in XGBoost's
+        native format. The pickle in .joblib is not stable across XGBoost
+        versions (the learned base_score can be silently lost), so load()
+        prefers the native file when present.
+
         Parameters
         ----------
         path : Path or str
@@ -275,6 +316,8 @@ class ModelArtifact:
         # Save model
         model_path = path.with_suffix(".joblib")
         joblib.dump(self.model, model_path)
+        if _is_xgboost_model(self.model):
+            self.model.save_model(path.with_suffix(".ubj"))
 
         # Save metadata
         metadata_path = path.with_suffix(".json")
@@ -299,11 +342,15 @@ class ModelArtifact:
         """
         path = Path(path)
 
-        # Load model
-        model_path = path.with_suffix(".joblib")
-        # Load metadata
+        # Load model — prefer the version-stable native XGBoost file over the
+        # pickle (see save()).
+        native_path = path.with_suffix(".ubj")
         metadata_path = path.with_suffix(".json")
-        model = joblib.load(model_path)
+        if HAS_XGBOOST and native_path.exists():
+            model: Any = xgb.XGBRegressor()
+            model.load_model(native_path)
+        else:
+            model = joblib.load(path.with_suffix(".joblib"))
 
         if metadata_path.exists():
             with open(metadata_path) as f:
@@ -313,6 +360,9 @@ class ModelArtifact:
             if isinstance(model, dict) and "model" in model:
                 model = model["model"]
             metadata = cls._metadata_from_legacy(model)
+
+        if _is_xgboost_model(model):
+            _check_xgb_base_score(model, path)
 
         logger.info("Loaded model artifact from %s", path)
         return cls(model=model, metadata=metadata)
