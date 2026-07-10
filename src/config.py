@@ -40,15 +40,19 @@ class DataConfig:
     goalie_cache_file: str = "goalie_stats.csv"
     xg_cache_dir: Path = field(default_factory=lambda: Path("data/xg"))
     active_season_cache_ttl_hours: int = 6
+    # MoneyPuck publishes team game-by-game xG as one bulk CSV (not per-season
+    # under /games/{season}/...). See https://moneypuck.com/data.htm.
+    xg_url: str = "https://moneypuck.com/moneypuck/playerData/careers/gameByGame/all_teams.csv"
+    # Back-compat alias; xg.py reads xg_url. Template form is unused.
     xg_url_template: str = (
-        "https://moneypuck.com/moneypuck/playerData/games/{season}/regular/teams.csv"
+        "https://moneypuck.com/moneypuck/playerData/careers/gameByGame/all_teams.csv"
     )
 
     # Request throttling
     request_delay: float = 0.2  # Delay between game data requests
     goalie_request_delay: float = 0.05  # Delay between goalie boxscore requests
     xg_request_delay: float = 0.2
-    xg_request_timeout: int = 30
+    xg_request_timeout: int = 180  # bulk all_teams.csv is ~100MB+
 
     # Resilient HTTP behavior (see src/http_client.py)
     user_agent: str = "nhl-goals-predictor/1.0 (+https://github.com/nedcut/nhl-goals-predictor)"

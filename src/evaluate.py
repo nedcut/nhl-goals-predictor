@@ -106,7 +106,14 @@ def main(argv: Optional[list[str]] = None) -> None:
     setup_logging(level="DEBUG" if args.verbose else "INFO")
 
     df = build_dataset(args.seasons, use_cache=True)
-    df = add_features(df, include_goalies=False, include_xg=args.include_xg)
+    # When xG is requested, require it so a dead MoneyPuck path cannot silently
+    # produce a no-xG evaluation labelled as include-xg.
+    df = add_features(
+        df,
+        include_goalies=False,
+        include_xg=args.include_xg,
+        require_xg=args.include_xg,
+    )
 
     result = time_series_cv_forecast(
         df,
