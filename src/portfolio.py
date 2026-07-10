@@ -204,7 +204,7 @@ def run_portfolio_pipeline(
             dist_model=dist_model,  # type: ignore[arg-type]
             threshold=threshold,
             n_splits=5,
-            feature_cols=feature_cols if point_model != "team_strength" else None,
+            feature_cols=feature_cols if point_model not in ("team_strength", "double_poisson") else None,
             xgb_params=xgb_params,
         )
 
@@ -222,12 +222,14 @@ def run_portfolio_pipeline(
     res_xgb_tuned = _cv("xgb", xgb_params=best_params)
     res_team_strength = _cv("team_strength")
     res_poisson_glm = _cv("poisson_glm")
+    res_double_poisson = _cv("double_poisson")
 
     results = {
         "xgb_current": res_xgb_current,
         "xgb_tuned": res_xgb_tuned,
         "team_strength": res_team_strength,
         "poisson_glm": res_poisson_glm,
+        "double_poisson": res_double_poisson,
     }
     candidates = {name: res.metrics_mean for name, res in results.items()}
     fold_std = {name: res.metrics_std for name, res in results.items()}

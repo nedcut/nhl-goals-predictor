@@ -34,10 +34,14 @@ from .probabilistic import (
     randomized_pit,
     reliability_curve,
 )
+from .double_poisson import DoublePoissonModel
 from .team_strength import TeamStrengthPoissonModel
 
-PointModel = Literal["xgb", "poisson_glm", "team_strength"]
+PointModel = Literal["xgb", "poisson_glm", "team_strength", "double_poisson"]
 DistModel = Literal["poisson", "nb2", "poisson_mixture"]
+
+# Point models that use only team IDs (no engineered rolling features).
+_TEAM_ID_POINT_MODELS = frozenset({"team_strength", "double_poisson"})
 
 
 def _brier_score(p: np.ndarray, y: np.ndarray) -> float:
@@ -124,6 +128,10 @@ def _fit_point_model(
         model = TeamStrengthPoissonModel().fit(df_fit)
         return model, None, []
 
+    if point_model == "double_poisson":
+        model = DoublePoissonModel().fit(df_fit)
+        return model, None, []
+
     if feature_cols is None:
         feature_cols = get_feature_columns(df_fit)
     if not feature_cols:
@@ -171,7 +179,7 @@ def _predict_mu(
     scaler: Optional[StandardScaler],
     feature_cols: list[str],
 ) -> np.ndarray:
-    if point_model == "team_strength":
+    if point_model in _TEAM_ID_POINT_MODELS:
         mu = model.predict_mu(df)  # type: ignore[attr-defined]
         return np.clip(mu, 1e-9, None)
 
@@ -221,7 +229,7 @@ def time_series_cv_forecast(
 
     df = df.sort_values("date").reset_index(drop=True)
 
-    if point_model != "team_strength":
+    if point_model not in _TEAM_ID_POINT_MODELS:
         if feature_cols is None:
             feature_cols = get_feature_columns(df)
         if not feature_cols:
